@@ -74,6 +74,13 @@ func ReduceWithError[S ~[]InType, InType any, OutType any](in S, fn func(OutType
 	return final, nil
 }
 
+func SumFn[S ~[]InType, InType any, OutType ordered](in S, fn func(InType) OutType) OutType {
+	var zero OutType
+	return Reduce(in, func(into OutType, each InType) OutType {
+		return into + fn(each)
+	}, zero)
+}
+
 func Flatten[S ~[]T, T any](in [][]T) []T {
 	var out []T
 	for _, xs := range in {

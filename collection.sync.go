@@ -57,8 +57,8 @@ type SyncSet[T comparable] struct {
 
 func NewSyncSet[T comparable]() *SyncSet[T] {
 	return &SyncSet[T]{
-		mu: &sync.RWMutex{},
-		m:  NewSet(),
+		mu: sync.RWMutex{},
+		m:  NewSet[T](),
 	}
 }
 

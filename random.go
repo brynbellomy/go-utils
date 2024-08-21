@@ -1,7 +1,7 @@
 package utils
 
 import (
-	"crypto/rand"
+	"math/rand"
 	"strconv"
 
 	"github.com/google/uuid"

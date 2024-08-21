@@ -33,7 +33,7 @@ type PostgresNotificationListener struct {
 	listener    *pq.Listener
 	minReconn   time.Duration
 	maxReconn   time.Duration
-	mbNotifs    Mailbox[string]
+	mbNotifs    *Mailbox[string]
 	chStop      chan struct{}
 	wgDone      sync.WaitGroup
 	closeOnce   sync.Once
@@ -121,7 +121,7 @@ type PostgresQueue[T any] struct {
 	notificationQuery   string
 	catchupQuery        string
 
-	mbQueue   Mailbox[T]
+	mbQueue   *Mailbox[T]
 	chStop    chan struct{}
 	wgDone    sync.WaitGroup
 	closeOnce sync.Once
