@@ -75,7 +75,7 @@ var (
 	Cause     = errors.Cause
 )
 
-func Annotate(err *error, msg string, args ...interface{}) {
+func Annotate(err *error, msg string, args ...any) {
 	if *err != nil {
 		*err = errors.Wrapf(*err, msg, args...)
 	}

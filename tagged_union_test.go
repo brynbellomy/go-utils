@@ -9,7 +9,7 @@ import (
 
 type Animal struct {
 	Type string `union:"@discriminator" json:"type"`
-	*Dog `       union:"dog"`
+	*Dog `       union:"dog,@default"`
 	*Cat `       union:"cat"`
 }
 
@@ -50,6 +50,20 @@ func TestUnmarshalUnion(t *testing.T) {
 		require.Nil(t, animal.Dog)
 		require.Equal(t, "Tabby", animal.Color)
 		require.Equal(t, "Meow!", animal.Meow)
+	})
+
+	t.Run("Unmarshal @default", func(t *testing.T) {
+		jsonData := `{"breed": "Labrador", "bark": "Woof!"}`
+
+		var animal Animal
+		err := UnmarshalUnion([]byte(jsonData), &animal)
+
+		require.NoError(t, err)
+		require.Equal(t, "dog", animal.Type)
+		require.NotNil(t, animal.Dog)
+		require.Nil(t, animal.Cat)
+		require.Equal(t, "Labrador", animal.Breed)
+		require.Equal(t, "Woof!", animal.Bark)
 	})
 
 	t.Run("Invalid Discriminator", func(t *testing.T) {

@@ -1,45 +1,31 @@
 package utils
 
 import (
-	"context"
-	"log/slog"
-	"os"
-	"os/signal"
-	"time"
+	"sync"
 )
 
-type ContextCloser interface {
-	Close(ctx context.Context) error
+type Signal[T any] struct {
+	*Mailbox[T]
+	latest T
+	mu     *sync.RWMutex
 }
 
-func KillGracefullyOnInterrupt(gracePeriod time.Duration, fn func(ctx context.Context) []ContextCloser) {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
-	closers := fn(ctx)
-
-	<-ctx.Done()
-	stop()
-	slog.Info("shutting down gracefully, press Ctrl+C again to force")
-
-	// Perform application shutdown with the specified grace period
-	timeoutCtx, cancel := context.WithTimeout(context.Background(), gracePeriod)
-	defer cancel()
-
-	for _, closer := range closers {
-		go func() {
-			defer cancel()
-			if err := closer.Close(timeoutCtx); err != nil {
-				slog.Error("could not close gracefully", "err", err)
-			}
-		}()
+func NewSignal[T any](capacity uint64) *Signal[T] {
+	return &Signal[T]{
+		Mailbox: NewMailbox[T](capacity),
+		mu:      &sync.RWMutex{},
 	}
+}
 
-	select {
-	case <-timeoutCtx.Done():
-		if timeoutCtx.Err() == context.DeadlineExceeded {
-			slog.Error("timeout exceeded, forcing shutdown")
-			os.Exit(-1)
-		}
-	}
+func (s *Signal[T]) Deliver(x T) (wasOverCapacity bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.latest = x
+	return s.Mailbox.Deliver(x)
+}
+
+func (s *Signal[T]) Latest() T {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.latest
 }

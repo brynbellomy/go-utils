@@ -14,8 +14,6 @@ type Mailbox[T any] struct {
 	// capacity - number of items the mailbox can buffer
 	// NOTE: if the capacity is 1, it's possible that an empty Retrieve may occur after a notification.
 	capacity uint64
-	// onCloseFn is a hook used to stop monitoring, if non-nil
-	onCloseFn func()
 }
 
 // Creates a new mailbox instance. If name is non-empty, it must be unique and calling Start will launch
@@ -36,15 +34,6 @@ func NewMailbox[T any](capacity uint64) *Mailbox[T] {
 func (m *Mailbox[T]) Notify() <-chan struct{} {
 	return m.chNotify
 }
-
-func (m *Mailbox[T]) Close() error {
-	if m.onCloseFn != nil {
-		m.onCloseFn()
-	}
-	return nil
-}
-
-func (m *Mailbox[T]) onClose(fn func()) { m.onCloseFn = fn }
 
 func (m *Mailbox[T]) load() (capacity uint64, loadPercent float64) {
 	capacity = m.capacity
