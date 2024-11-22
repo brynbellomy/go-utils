@@ -23,6 +23,12 @@ func (m Set[T]) AddAll(items ...T) {
 	}
 }
 
+func (m Set[T]) AddSet(other Set[T]) {
+	for item := range other {
+		m.Add(item)
+	}
+}
+
 func (m Set[T]) Remove(item T) bool {
 	has := m.Has(item)
 	delete(m, item)
