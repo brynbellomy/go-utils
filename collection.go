@@ -17,6 +17,12 @@ func (m Set[T]) Add(item T) (exists bool) {
 	return exists
 }
 
+func (m Set[T]) AddAll(items ...T) {
+	for _, item := range items {
+		m.Add(item)
+	}
+}
+
 func (m Set[T]) Remove(item T) bool {
 	has := m.Has(item)
 	delete(m, item)
