@@ -1,5 +1,9 @@
 package utils
 
+import (
+	"maps"
+)
+
 type Set[T comparable] map[T]struct{}
 
 func NewSet[T comparable]() Set[T] {
@@ -33,4 +37,8 @@ func (m Set[T]) Remove(item T) bool {
 	has := m.Has(item)
 	delete(m, item)
 	return has
+}
+
+func (m Set[T]) Copy() Set[T] {
+	return Set[T](maps.Clone(m))
 }
