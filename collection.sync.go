@@ -50,6 +50,18 @@ func (sm *SyncMap[K, V]) Range(f func(key K, value V) bool) {
 	}
 }
 
+func (sm *SyncMap[K, V]) Iter() func(yield func(k K, v V) bool) {
+	return func(yield func(k K, v V) bool) {
+		sm.mu.RLock()
+		defer sm.mu.RUnlock()
+		for k, v := range sm.m {
+			if !yield(k, v) {
+				break
+			}
+		}
+	}
+}
+
 type SyncSet[T comparable] struct {
 	mu sync.RWMutex
 	m  Set[T]
