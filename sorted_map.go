@@ -1,38 +1,41 @@
 package utils
 
 import (
-	"golang.org/x/exp/constraints"
+	"cmp"
+	"fmt"
 )
 
 // SortedMap is a map that maintains keys in sorted order.
-type SortedMap[K constraints.Ordered, V any] struct {
-	root *node[K, V]
+
+// SortedMap is a map that maintains keys in sorted order.
+type SortedMap[K cmp.Ordered, V any] struct {
+	root   *node[K, V]
+	length int
 }
 
-type node[K constraints.Ordered, V any] struct {
+type node[K cmp.Ordered, V any] struct {
 	key   K
 	value V
 	left  *node[K, V]
 	right *node[K, V]
 }
 
-func NewSortedMap[K constraints.Ordered, V any]() *SortedMap[K, V] {
+func NewSortedMap[K cmp.Ordered, V any]() *SortedMap[K, V] {
 	return &SortedMap[K, V]{}
 }
 
 func (sm *SortedMap[K, V]) Clear() {
 	sm.root = nil
+	sm.length = 0
 }
 
 func (sm *SortedMap[K, V]) Len() int {
-	count := 0
-	for range sm.Iter() {
-		count++
-	}
-	return count
+	return sm.length
 }
 
 func (sm *SortedMap[K, V]) Insert(key K, value V) {
+	sm.length++
+
 	if sm.root == nil {
 		sm.root = &node[K, V]{key: key, value: value}
 		return
@@ -129,4 +132,48 @@ func (sm *SortedMap[K, V]) ReverseIter() func(yield func(k K, v V) bool) {
 			current = current.left
 		}
 	}
+}
+
+func (sm *SortedMap[K, V]) Keys() []K {
+	xs := make([]K, sm.length)
+	i := 0
+	for x := range sm.Iter() {
+		xs[i] = x
+	}
+	return xs
+}
+
+type SortedSet[K cmp.Ordered] SortedMap[K, struct{}]
+
+func (ss *SortedSet[K]) Clear() {
+	(*SortedMap[K, struct{}])(ss).Clear()
+}
+
+func (ss *SortedSet[K]) Len() int {
+	return (*SortedMap[K, struct{}])(ss).Len()
+}
+
+func (ss *SortedSet[K]) Insert(key K) {
+	(*SortedMap[K, struct{}])(ss).Insert(key, struct{}{})
+}
+
+func (ss *SortedSet[K]) Has(key K) bool {
+	_, ok := (*SortedMap[K, struct{}])(ss).Get(key)
+	return ok
+}
+
+func (ss *SortedSet[K]) Iter() func(yield func(k K, v struct{}) bool) {
+	return (*SortedMap[K, struct{}])(ss).Iter()
+}
+
+func (ss *SortedSet[K]) ReverseIter() func(yield func(k K, v struct{}) bool) {
+	return (*SortedMap[K, struct{}])(ss).ReverseIter()
+}
+
+func (ss *SortedSet[K]) Slice() []K {
+	return (*SortedMap[K, struct{}])(ss).Keys()
+}
+
+func (ss *SortedSet[K]) String() string {
+	return fmt.Sprint(ss.Slice())
 }
