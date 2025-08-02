@@ -2,6 +2,7 @@ package errors
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/pkg/errors"
@@ -94,4 +95,34 @@ func OneOf(received error, errs ...error) bool {
 		}
 	}
 	return false
+}
+
+func WithCause(err error, cause error) error {
+	return &withCause{err, cause}
+}
+
+type withCause struct {
+	error
+	cause error
+}
+
+func (w *withCause) Error() string { return w.error.Error() + ": " + w.cause.Error() }
+
+func (w *withCause) Cause() error { return w.cause }
+
+// Unwrap provides compatibility for Go 1.13 error chains.
+func (w *withCause) Unwrap() error { return w.cause }
+
+func (w *withCause) Format(s fmt.State, verb rune) {
+	switch verb {
+	case 'v':
+		if s.Flag('+') {
+			fmt.Fprintf(s, "%+v\n", w.Cause())
+			io.WriteString(s, w.error.Error())
+			return
+		}
+		fallthrough
+	case 's', 'q':
+		io.WriteString(s, w.Error())
+	}
 }

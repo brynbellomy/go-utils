@@ -145,6 +145,10 @@ func (sm *SortedMap[K, V]) Keys() []K {
 
 type SortedSet[K cmp.Ordered] SortedMap[K, struct{}]
 
+func NewSortedSet[K cmp.Ordered]() *SortedSet[K] {
+	return &SortedSet[K]{}
+}
+
 func (ss *SortedSet[K]) Clear() {
 	(*SortedMap[K, struct{}])(ss).Clear()
 }
