@@ -166,8 +166,14 @@ func (ss *SortedSet[K]) Has(key K) bool {
 	return ok
 }
 
-func (ss *SortedSet[K]) Iter() func(yield func(k K, v struct{}) bool) {
-	return (*SortedMap[K, struct{}])(ss).Iter()
+func (ss *SortedSet[K]) Iter() func(yield func(k K) bool) {
+	return func(yield func(k K) bool) {
+		for k := range (*SortedMap[K, struct{}])(ss).Iter() {
+			if !yield(k) {
+				return
+			}
+		}
+	}
 }
 
 func (ss *SortedSet[K]) ReverseIter() func(yield func(k K, v struct{}) bool) {
