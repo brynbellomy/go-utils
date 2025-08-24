@@ -50,16 +50,59 @@ func UnmarshalUnion(data []byte, v any) error {
 
 	// Find the matching union field
 	var matchingField reflect.Value
+	var defaultField reflect.Value
+	discriminatorStr := fmt.Sprint(discriminatorValue)
+	
 	for i := 0; i < rv.NumField(); i++ {
 		field := rv.Type().Field(i)
 		unionTag := field.Tag.Get(UnionTag)
-		if unionTag == discriminatorValue {
+		if unionTag == "" || unionTag == "@discriminator" {
+			continue
+		}
+		
+		// Parse comma-separated union tags
+		tags := strings.Split(unionTag, ",")
+		matchesDiscriminator := false
+		
+		for _, tag := range tags {
+			tag = strings.TrimSpace(tag)
+			if tag == "@default" {
+				defaultField = rv.Field(i)
+			}
+			if tag == discriminatorStr {
+				matchesDiscriminator = true
+			}
+		}
+		
+		if matchesDiscriminator {
 			matchingField = rv.Field(i)
 			break
 		}
 	}
+	
+	// If no exact match found, try to use default field
 	if !matchingField.IsValid() {
-		return errors.Errorf("no matching union field found for %s=%v", discriminatorJSONKey, discriminatorValue)
+		if discriminatorValue == nil && defaultField.IsValid() {
+			matchingField = defaultField
+			// Set discriminator to the first non-@default tag
+			for i := 0; i < rv.NumField(); i++ {
+				field := rv.Type().Field(i)
+				unionTag := field.Tag.Get(UnionTag)
+				if rv.Field(i) == defaultField {
+					tags := strings.Split(unionTag, ",")
+					for _, tag := range tags {
+						tag = strings.TrimSpace(tag)
+						if tag != "@default" && tag != "" {
+							discriminatorValue = tag
+							break
+						}
+					}
+					break
+				}
+			}
+		} else {
+			return errors.Errorf("no matching union field found for %s=%v", discriminatorJSONKey, discriminatorValue)
+		}
 	}
 
 	// Create a new instance of the matching field's type

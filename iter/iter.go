@@ -27,7 +27,7 @@ func Map2[T, U, Out1, Out2 any](seq iter.Seq2[T, U], fn func(t T, u U) (Out1, Ou
 	}
 }
 
-func MultiIterator[X cmp.Ordered](iters ...iter.Seq[X]) iter.Seq[X] {
+func MultiIterator[X any](iters ...iter.Seq[X]) iter.Seq[X] {
 	return func(yield func(x X) bool) {
 		for _, iter := range iters {
 			for x := range iter {
