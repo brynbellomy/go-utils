@@ -126,3 +126,47 @@ func (w *withCause) Format(s fmt.State, verb rune) {
 		io.WriteString(s, w.Error())
 	}
 }
+
+type withFields struct {
+	fields []any
+	parent error
+}
+
+func NewWithFields(msg string, fields ...any) error {
+	return WithFields(New(msg), fields...)
+}
+
+func WrapWithFields(err error, msg string, fields ...any) error {
+	return WithFields(Wrap(err, msg), fields...)
+}
+
+func WithFields(err error, fields ...any) error {
+	return &withFields{
+		parent: err,
+		fields: fields,
+	}
+}
+
+func Fields(err error) []any {
+	var fields []any
+	for {
+		errf := &withFields{}
+		if !errors.As(err, &errf) {
+			break
+		}
+		fields = append(fields, errf.fields...)
+		err = errf.parent
+	}
+	return fields
+}
+
+func (ef *withFields) Error() string {
+	if ef.parent != nil {
+		return ef.parent.Error()
+	}
+	return "error with fields"
+}
+
+func (ef *withFields) Unwrap() error {
+	return ef.parent
+}
