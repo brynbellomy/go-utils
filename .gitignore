@@ -1,2 +1,3 @@
 *.sublime-project
 .omega.json
+.claude/
