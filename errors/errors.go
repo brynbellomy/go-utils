@@ -1,6 +1,7 @@
 package errors
 
 import (
+	stderrors "errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -68,12 +69,15 @@ var (
 )
 
 var (
-	New       = errors.New
-	Errorf    = errors.Errorf
-	Wrap      = errors.Wrap
-	Wrapf     = errors.Wrapf
-	WithStack = errors.WithStack
-	Cause     = errors.Cause
+	New          = errors.New
+	Errorf       = errors.Errorf
+	Wrap         = errors.Wrap
+	Wrapf        = errors.Wrapf
+	WithStack    = errors.WithStack
+	WithMessage  = errors.WithMessage
+	WithMessagef = errors.WithMessagef
+	Cause        = errors.Cause
+	Join         = stderrors.Join
 )
 
 func Annotate(err *error, msg string, args ...any) {
