@@ -21,14 +21,14 @@ func RandomBytes(n int) ([]byte, error) {
 }
 
 func RandomString(n int) (string, error) {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, n)
-	_, err := rand.Read(b)
-	if err != nil {
-		return "", err
+	for i := range b {
+		idx := rand.Intn(len(charset))
+		b[i] = charset[idx]
 	}
 	return string(b), nil
 }
-
 func MustUUIDv7() string {
 	vid, err := uuid.NewV7()
 	if err != nil {

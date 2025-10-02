@@ -1,3 +1,4 @@
 *.sublime-project
 .omega.json
 .claude/
+.DS_Store
