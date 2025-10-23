@@ -1,9 +1,19 @@
 package utils
 
 import (
+	"context"
 	"sync"
 	"time"
 )
+
+func SleepWithContext(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
 
 func Debounce(f func(), delay time.Duration) func() {
 	var mutex sync.Mutex
