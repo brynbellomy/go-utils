@@ -22,6 +22,16 @@ func (sm *SyncMap[K, V]) Get(key K) (V, bool) {
 	return val, ok
 }
 
+func (sm *SyncMap[K, V]) MustGet(key K) V {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	val, ok := sm.m[key]
+	if !ok {
+		panic("invariant violation")
+	}
+	return val
+}
+
 func (sm *SyncMap[K, V]) Set(key K, value V) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
