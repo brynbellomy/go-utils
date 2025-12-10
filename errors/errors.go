@@ -174,3 +174,75 @@ func (ef *withFields) Error() string {
 func (ef *withFields) Unwrap() error {
 	return ef.parent
 }
+
+func (ef *withFields) Format(s fmt.State, verb rune) {
+	switch verb {
+	case 'v':
+		if s.Flag('+') {
+			// Verbose format: show parent error with stack if available
+			if ef.parent != nil {
+				fmt.Fprintf(s, "%+v", ef.parent)
+			} else {
+				io.WriteString(s, "error with fields")
+			}
+		} else {
+			// Standard %v format
+			io.WriteString(s, ef.Error())
+		}
+		// Add all fields in logfmt format
+		allFields := Fields(ef)
+		if len(allFields) > 0 {
+			io.WriteString(s, " ")
+			formatLogfmt(s, allFields)
+		}
+	case 's':
+		io.WriteString(s, ef.Error())
+		// Add all fields in logfmt format
+		allFields := Fields(ef)
+		if len(allFields) > 0 {
+			io.WriteString(s, " ")
+			formatLogfmt(s, allFields)
+		}
+	case 'q':
+		// For quoted format, just quote the error message without fields
+		fmt.Fprintf(s, "%q", ef.Error())
+	}
+}
+
+func formatLogfmt(w io.Writer, fields []any) {
+	for i := 0; i < len(fields); i += 2 {
+		if i > 0 {
+			io.WriteString(w, " ")
+		}
+
+		// Write key
+		key := fmt.Sprint(fields[i])
+		io.WriteString(w, key)
+		io.WriteString(w, "=")
+
+		// Write value
+		if i+1 < len(fields) {
+			value := fields[i+1]
+			switch v := value.(type) {
+			case string:
+				// Quote strings that contain spaces or special characters
+				if needsQuoting(v) {
+					fmt.Fprintf(w, "%q", v)
+				} else {
+					io.WriteString(w, v)
+				}
+			default:
+				fmt.Fprint(w, value)
+			}
+		}
+	}
+}
+
+func needsQuoting(s string) bool {
+	for _, r := range s {
+		if r == ' ' || r == '=' || r == '"' || r == '\n' || r == '\t' || r == '\r' {
+			return true
+		}
+	}
+	return false
+}

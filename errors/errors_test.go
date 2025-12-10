@@ -279,6 +279,85 @@ func TestWithFields_NilParent(t *testing.T) {
 	require.Equal(t, fields, extractedFields)
 }
 
+func TestWithFields_Format(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		format   string
+		expected string
+	}{
+		{
+			name:     "SimpleFields",
+			err:      errors.NewWithFields("operation failed", "user_id", 123, "action", "login"),
+			format:   "%s",
+			expected: "operation failed user_id=123 action=login",
+		},
+		{
+			name:     "StringWithSpaces",
+			err:      errors.NewWithFields("request failed", "method", "GET", "path", "/api/v1/users"),
+			format:   "%s",
+			expected: "request failed method=GET path=/api/v1/users",
+		},
+		{
+			name:     "StringRequiringQuotes",
+			err:      errors.NewWithFields("error occurred", "message", "connection timed out", "code", 500),
+			format:   "%s",
+			expected: `error occurred message="connection timed out" code=500`,
+		},
+		{
+			name:     "MixedTypes",
+			err:      errors.NewWithFields("validation error", "field", "email", "value", "test@example.com", "required", true, "max_length", 255),
+			format:   "%s",
+			expected: "validation error field=email value=test@example.com required=true max_length=255",
+		},
+		{
+			name:     "VerboseFormat",
+			err:      errors.NewWithFields("base error", "key", "value"),
+			format:   "%v",
+			expected: "base error key=value",
+		},
+		{
+			name:     "QuotedFormat",
+			err:      errors.NewWithFields("error", "key", "value"),
+			format:   "%q",
+			expected: `"error"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := fmt.Sprintf(tt.format, tt.err)
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestWithFields_FormatNested(t *testing.T) {
+	baseErr := pkgerrors.New("database error")
+	err1 := errors.WithFields(baseErr, "table", "users", "operation", "insert")
+	err2 := errors.WithFields(err1, "user_id", 123, "retry", 3)
+
+	result := fmt.Sprintf("%s", err2)
+	// Fields should be collected from all levels
+	require.Contains(t, result, "user_id=123")
+	require.Contains(t, result, "retry=3")
+	require.Contains(t, result, "table=users")
+	require.Contains(t, result, "operation=insert")
+	require.Contains(t, result, "database error")
+}
+
+func TestWithFields_FormatVerbosePlus(t *testing.T) {
+	baseErr := pkgerrors.New("connection failed")
+	fieldErr := errors.WithFields(baseErr, "host", "localhost", "port", 5432)
+
+	result := fmt.Sprintf("%+v", fieldErr)
+	// Verbose format should include fields
+	require.Contains(t, result, "host=localhost")
+	require.Contains(t, result, "port=5432")
+	// And should include the base error (with stack if pkg/errors added it)
+	require.Contains(t, result, "connection failed")
+}
+
 // Utility Function Tests
 
 func TestAnnotate(t *testing.T) {
