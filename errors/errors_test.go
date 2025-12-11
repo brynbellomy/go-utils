@@ -209,8 +209,8 @@ func TestWithFields(t *testing.T) {
 	// Test Unwrap() method
 	require.Equal(t, baseErr, pkgerrors.Unwrap(result))
 
-	// Test Fields() extraction
-	extractedFields := errors.Fields(result)
+	// Test GetFields() extraction
+	extractedFields := errors.GetFields(result).List()
 	require.Equal(t, fields, extractedFields)
 }
 
@@ -221,7 +221,7 @@ func TestNewWithFields(t *testing.T) {
 	require.NotNil(t, result)
 	require.Equal(t, "authentication failed", result.Error())
 
-	extractedFields := errors.Fields(result)
+	extractedFields := errors.GetFields(result).List()
 	require.Equal(t, fields, extractedFields)
 }
 
@@ -233,7 +233,7 @@ func TestWrapWithFields(t *testing.T) {
 	require.NotNil(t, result)
 	require.Equal(t, "failed to connect: database connection failed", result.Error())
 
-	extractedFields := errors.Fields(result)
+	extractedFields := errors.GetFields(result).List()
 	require.Equal(t, fields, extractedFields)
 }
 
@@ -249,14 +249,14 @@ func TestFields_MultipleNesting(t *testing.T) {
 	err3 := errors.WithFields(err2, fields3...)
 
 	// Fields should be collected from all levels
-	allFields := errors.Fields(err3)
+	allFields := errors.GetFields(err3).List()
 	expected := append(fields3, append(fields2, fields1...)...)
 	require.Equal(t, expected, allFields)
 }
 
 func TestFields_NoFields(t *testing.T) {
 	regularErr := pkgerrors.New("regular error")
-	fields := errors.Fields(regularErr)
+	fields := errors.GetFields(regularErr).List()
 	require.Empty(t, fields)
 }
 
@@ -264,7 +264,7 @@ func TestFields_EmptyFields(t *testing.T) {
 	baseErr := pkgerrors.New("base error")
 	result := errors.WithFields(baseErr)
 
-	fields := errors.Fields(result)
+	fields := errors.GetFields(result).List()
 	require.Empty(t, fields)
 }
 
@@ -272,11 +272,10 @@ func TestWithFields_NilParent(t *testing.T) {
 	fields := []any{"key", "value"}
 	result := errors.WithFields(nil, fields...)
 
-	require.Equal(t, "error with fields", result.Error())
-	require.Nil(t, pkgerrors.Unwrap(result))
+	require.Nil(t, result)
 
-	extractedFields := errors.Fields(result)
-	require.Equal(t, fields, extractedFields)
+	extractedFields := errors.GetFields(result).List()
+	require.Nil(t, extractedFields)
 }
 
 func TestWithFields_Format(t *testing.T) {
@@ -489,7 +488,7 @@ func TestComplexErrorChain(t *testing.T) {
 	require.Equal(t, 500, extracted.Code)
 
 	// Test fields extraction
-	fields := errors.Fields(fieldErr)
+	fields := errors.GetFields(fieldErr).List()
 	require.Equal(t, []any{"user_id", 123, "operation", "read"}, fields)
 
 	// Test cause unwrapping - fieldErr unwraps to causeErr, not baseErr
@@ -580,7 +579,7 @@ func TestConcurrentAccess(t *testing.T) {
 
 			// Access error methods concurrently
 			_ = fieldErr.Error()
-			fields := errors.Fields(fieldErr)
+			fields := errors.GetFields(fieldErr).List()
 			require.Equal(t, []any{"concurrent", true}, fields)
 
 			extracted, ok := errors.AsStatusCoder(fieldErr)
@@ -745,7 +744,7 @@ func TestComplexStdlibErrorChains(t *testing.T) {
 	require.False(t, result)
 
 	// Test field extraction works - but WithCause breaks the field chain too
-	fields := errors.Fields(level3)
+	fields := errors.GetFields(level3).List()
 	require.Empty(t, fields) // WithCause prevents field extraction from level2
 
 	// Test that we can find the base error through cause unwrapping

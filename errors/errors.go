@@ -131,8 +131,22 @@ func (w *withCause) Format(s fmt.State, verb rune) {
 	}
 }
 
+type Fields []any
+
+func (f *Fields) Add(fields ...any) {
+	if f == nil {
+		arr := Fields(make([]any, 0, len(fields)))
+		f = &arr
+	}
+	*f = append(*f, fields...)
+}
+
+func (f Fields) List() []any {
+	return f
+}
+
 type withFields struct {
-	fields []any
+	fields Fields
 	parent error
 }
 
@@ -141,17 +155,33 @@ func NewWithFields(msg string, fields ...any) error {
 }
 
 func WrapWithFields(err error, msg string, fields ...any) error {
+	if err == nil {
+		return nil
+	}
 	return WithFields(Wrap(err, msg), fields...)
 }
 
 func WithFields(err error, fields ...any) error {
+	if err == nil {
+		return nil
+	}
+
+	flattened := make(Fields, 0, len(fields))
+	for _, x := range fields {
+		if fs, isFields := x.(Fields); isFields {
+			flattened = append(flattened, fs...)
+		} else {
+			flattened = append(flattened, x)
+		}
+	}
+
 	return &withFields{
 		parent: err,
-		fields: fields,
+		fields: flattened,
 	}
 }
 
-func Fields(err error) []any {
+func GetFields(err error) Fields {
 	var fields []any
 	for {
 		errf := &withFields{}
@@ -162,6 +192,10 @@ func Fields(err error) []any {
 		err = errf.parent
 	}
 	return fields
+}
+
+func ListFields(err error) []any {
+	return GetFields(err)
 }
 
 func (ef *withFields) Error() string {
@@ -190,7 +224,7 @@ func (ef *withFields) Format(s fmt.State, verb rune) {
 			io.WriteString(s, ef.Error())
 		}
 		// Add all fields in logfmt format
-		allFields := Fields(ef)
+		allFields := GetFields(ef)
 		if len(allFields) > 0 {
 			io.WriteString(s, " ")
 			formatLogfmt(s, allFields)
@@ -198,7 +232,7 @@ func (ef *withFields) Format(s fmt.State, verb rune) {
 	case 's':
 		io.WriteString(s, ef.Error())
 		// Add all fields in logfmt format
-		allFields := Fields(ef)
+		allFields := GetFields(ef)
 		if len(allFields) > 0 {
 			io.WriteString(s, " ")
 			formatLogfmt(s, allFields)
