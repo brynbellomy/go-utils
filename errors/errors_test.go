@@ -152,13 +152,16 @@ func TestWithCause(t *testing.T) {
 	expected := "original error: root cause"
 	require.Equal(t, expected, result.Error())
 
-	// Test Cause() method
+	// Test Cause() method - provides direct access to root cause
 	causer, ok := result.(interface{ Cause() error })
 	require.True(t, ok)
 	require.Equal(t, cause, causer.Cause())
 
-	// Test Unwrap() method
-	require.Equal(t, cause, pkgerrors.Unwrap(result))
+	// Test Unwrap() method - returns the wrapper to maintain proper chain
+	require.Equal(t, original, pkgerrors.Unwrap(result))
+
+	// Can still access cause via Cause() method
+	require.Equal(t, cause, causer.Cause())
 }
 
 func TestWithCause_Format(t *testing.T) {
@@ -194,13 +197,13 @@ func TestWithCause_FormatVerbose(t *testing.T) {
 	require.Contains(t, result, "original error")
 }
 
-// WithFields Tests
+// WithMetadata Tests (Fields)
 
-func TestWithFields(t *testing.T) {
+func TestWithMetadata_Fields(t *testing.T) {
 	baseErr := pkgerrors.New("base error")
 	fields := []any{"key1", "value1", "key2", 42}
 
-	result := errors.WithFields(baseErr, fields...)
+	result := errors.WithMetadata(baseErr, fields...)
 	require.NotNil(t, result)
 
 	// Test Error() method
@@ -214,9 +217,9 @@ func TestWithFields(t *testing.T) {
 	require.Equal(t, fields, extractedFields)
 }
 
-func TestNewWithFields(t *testing.T) {
+func TestWithMetadata_NewWithFields(t *testing.T) {
 	fields := []any{"user_id", 123, "action", "login"}
-	result := errors.NewWithFields("authentication failed", fields...)
+	result := errors.WithMetadata(errors.New("authentication failed"), fields...)
 
 	require.NotNil(t, result)
 	require.Equal(t, "authentication failed", result.Error())
@@ -225,11 +228,11 @@ func TestNewWithFields(t *testing.T) {
 	require.Equal(t, fields, extractedFields)
 }
 
-func TestWrapWithFields(t *testing.T) {
+func TestWithMetadata_WrapWithFields(t *testing.T) {
 	originalErr := pkgerrors.New("database connection failed")
 	fields := []any{"host", "localhost", "port", 5432}
 
-	result := errors.WrapWithFields(originalErr, "failed to connect", fields...)
+	result := errors.WithMetadata(errors.Wrap(originalErr, "failed to connect"), fields...)
 	require.NotNil(t, result)
 	require.Equal(t, "failed to connect: database connection failed", result.Error())
 
@@ -244,9 +247,9 @@ func TestFields_MultipleNesting(t *testing.T) {
 	fields3 := []any{"level", 3, "table", "users"}
 
 	// Create nested field errors
-	err1 := errors.WithFields(baseErr, fields1...)
-	err2 := errors.WithFields(err1, fields2...)
-	err3 := errors.WithFields(err2, fields3...)
+	err1 := errors.WithMetadata(baseErr, fields1...)
+	err2 := errors.WithMetadata(err1, fields2...)
+	err3 := errors.WithMetadata(err2, fields3...)
 
 	// Fields should be collected from all levels
 	allFields := errors.GetFields(err3).List()
@@ -262,15 +265,15 @@ func TestFields_NoFields(t *testing.T) {
 
 func TestFields_EmptyFields(t *testing.T) {
 	baseErr := pkgerrors.New("base error")
-	result := errors.WithFields(baseErr)
+	result := errors.WithMetadata(baseErr)
 
 	fields := errors.GetFields(result).List()
 	require.Empty(t, fields)
 }
 
-func TestWithFields_NilParent(t *testing.T) {
+func TestWithMetadata_NilParent(t *testing.T) {
 	fields := []any{"key", "value"}
-	result := errors.WithFields(nil, fields...)
+	result := errors.WithMetadata(nil, fields...)
 
 	require.Nil(t, result)
 
@@ -278,7 +281,7 @@ func TestWithFields_NilParent(t *testing.T) {
 	require.Nil(t, extractedFields)
 }
 
-func TestWithFields_Format(t *testing.T) {
+func TestWithMetadata_Format(t *testing.T) {
 	tests := []struct {
 		name     string
 		err      error
@@ -287,37 +290,37 @@ func TestWithFields_Format(t *testing.T) {
 	}{
 		{
 			name:     "SimpleFields",
-			err:      errors.NewWithFields("operation failed", "user_id", 123, "action", "login"),
+			err:      errors.WithMetadata(errors.New("operation failed"), "user_id", 123, "action", "login"),
 			format:   "%s",
 			expected: "operation failed user_id=123 action=login",
 		},
 		{
 			name:     "StringWithSpaces",
-			err:      errors.NewWithFields("request failed", "method", "GET", "path", "/api/v1/users"),
+			err:      errors.WithMetadata(errors.New("request failed"), "method", "GET", "path", "/api/v1/users"),
 			format:   "%s",
 			expected: "request failed method=GET path=/api/v1/users",
 		},
 		{
 			name:     "StringRequiringQuotes",
-			err:      errors.NewWithFields("error occurred", "message", "connection timed out", "code", 500),
+			err:      errors.WithMetadata(errors.New("error occurred"), "message", "connection timed out", "code", 500),
 			format:   "%s",
 			expected: `error occurred message="connection timed out" code=500`,
 		},
 		{
 			name:     "MixedTypes",
-			err:      errors.NewWithFields("validation error", "field", "email", "value", "test@example.com", "required", true, "max_length", 255),
+			err:      errors.WithMetadata(errors.New("validation error"), "field", "email", "value", "test@example.com", "required", true, "max_length", 255),
 			format:   "%s",
 			expected: "validation error field=email value=test@example.com required=true max_length=255",
 		},
 		{
 			name:     "VerboseFormat",
-			err:      errors.NewWithFields("base error", "key", "value"),
+			err:      errors.WithMetadata(errors.New("base error"), "key", "value"),
 			format:   "%v",
 			expected: "base error key=value",
 		},
 		{
 			name:     "QuotedFormat",
-			err:      errors.NewWithFields("error", "key", "value"),
+			err:      errors.WithMetadata(errors.New("error"), "key", "value"),
 			format:   "%q",
 			expected: `"error"`,
 		},
@@ -331,10 +334,10 @@ func TestWithFields_Format(t *testing.T) {
 	}
 }
 
-func TestWithFields_FormatNested(t *testing.T) {
+func TestWithMetadata_FormatNested(t *testing.T) {
 	baseErr := pkgerrors.New("database error")
-	err1 := errors.WithFields(baseErr, "table", "users", "operation", "insert")
-	err2 := errors.WithFields(err1, "user_id", 123, "retry", 3)
+	err1 := errors.WithMetadata(baseErr, "table", "users", "operation", "insert")
+	err2 := errors.WithMetadata(err1, "user_id", 123, "retry", 3)
 
 	result := fmt.Sprintf("%s", err2)
 	// Fields should be collected from all levels
@@ -345,9 +348,9 @@ func TestWithFields_FormatNested(t *testing.T) {
 	require.Contains(t, result, "database error")
 }
 
-func TestWithFields_FormatVerbosePlus(t *testing.T) {
+func TestWithMetadata_FormatVerbosePlus(t *testing.T) {
 	baseErr := pkgerrors.New("connection failed")
-	fieldErr := errors.WithFields(baseErr, "host", "localhost", "port", 5432)
+	fieldErr := errors.WithMetadata(baseErr, "host", "localhost", "port", 5432)
 
 	result := fmt.Sprintf("%+v", fieldErr)
 	// Verbose format should include fields
@@ -472,11 +475,11 @@ func TestReExportedFunctions(t *testing.T) {
 // Integration and Edge Case Tests
 
 func TestComplexErrorChain(t *testing.T) {
-	// Test combining StatusCoder, WithCause, and WithFields
+	// Test combining StatusCoder, WithCause, and WithMetadata
 	baseErr := pkgerrors.New("database timeout")
 	statusErr := errors.NewStatusCoder(500, "internal error")
 	causeErr := errors.WithCause(statusErr, baseErr)
-	fieldErr := errors.WithFields(causeErr, "user_id", 123, "operation", "read")
+	fieldErr := errors.WithMetadata(causeErr, "user_id", 123, "operation", "read")
 
 	// Test error message
 	require.Contains(t, fieldErr.Error(), "internal error")
@@ -499,7 +502,7 @@ func TestStandardLibraryCompatibility(t *testing.T) {
 	// Test compatibility with standard library pkgerrors.As and pkgerrors.Is
 	statusErr := errors.NewStatusCoder(404, "not found")
 	wrappedErr := pkgerrors.Wrap(statusErr, "wrapped")
-	fieldErr := errors.WithFields(wrappedErr, "resource", "user")
+	fieldErr := errors.WithMetadata(wrappedErr, "resource", "user")
 
 	// Test pkgerrors.As with StatusCoder
 	var sc *errors.StatusCoder
@@ -540,35 +543,43 @@ func TestNilAndZeroValues(t *testing.T) {
 		require.True(t, ok)
 		require.Nil(t, causer.Cause())
 
-		// Test that Unwrap() returns nil
-		require.Nil(t, pkgerrors.Unwrap(result))
+		// Test that Unwrap() returns the wrapper (baseErr), not the cause
+		require.Equal(t, baseErr, pkgerrors.Unwrap(result))
 	})
 }
 
 func TestErrorUnwrappingChain(t *testing.T) {
 	base := pkgerrors.New("base error")
-	cause1 := errors.WithCause(pkgerrors.New("level 1"), base)
-	cause2 := errors.WithCause(pkgerrors.New("level 2"), cause1)
-	fields := errors.WithFields(cause2, "key", "value")
+	level1Err := pkgerrors.New("level 1")
+	level2Err := pkgerrors.New("level 2")
+	cause1 := errors.WithCause(level1Err, base)
+	cause2 := errors.WithCause(level2Err, cause1)
+	fields := errors.WithMetadata(cause2, "key", "value")
 
-	// Test unwrapping chain
+	// Test unwrapping chain - Unwrap follows the wrapper chain
 	unwrapped1 := pkgerrors.Unwrap(fields)
 	require.Equal(t, cause2, unwrapped1)
 
 	unwrapped2 := pkgerrors.Unwrap(unwrapped1)
-	require.Equal(t, cause1, unwrapped2)
+	require.Equal(t, level2Err, unwrapped2) // WithCause unwraps to wrapper
 
 	unwrapped3 := pkgerrors.Unwrap(unwrapped2)
-	require.Equal(t, base, unwrapped3)
+	require.Nil(t, unwrapped3) // level2Err is terminal
 
-	unwrapped4 := pkgerrors.Unwrap(unwrapped3)
-	require.Nil(t, unwrapped4)
+	// Test accessing causes via Cause() method
+	causer, ok := cause2.(interface{ Cause() error })
+	require.True(t, ok)
+	require.Equal(t, cause1, causer.Cause())
+
+	causer, ok = cause1.(interface{ Cause() error })
+	require.True(t, ok)
+	require.Equal(t, base, causer.Cause())
 }
 
 func TestConcurrentAccess(t *testing.T) {
 	// Test that our error types are safe for concurrent access
 	statusErr := errors.NewStatusCoder(500, "server error")
-	fieldErr := errors.WithFields(statusErr, "concurrent", true)
+	fieldErr := errors.WithMetadata(statusErr, "concurrent", true)
 
 	done := make(chan bool, 10)
 
@@ -594,12 +605,283 @@ func TestConcurrentAccess(t *testing.T) {
 	}
 }
 
+// WithMetadata Tests (Properties)
+
+func TestWithMetadata_Properties(t *testing.T) {
+	baseErr := pkgerrors.New("base error")
+
+	t.Run("SingleProperty", func(t *testing.T) {
+		err := errors.WithMetadata(baseErr, errors.FaultInternal)
+		require.NotNil(t, err)
+		require.Equal(t, "base error", err.Error())
+		require.Equal(t, errors.FaultInternal, errors.GetFault(err))
+	})
+
+	t.Run("MultipleProperties", func(t *testing.T) {
+		err := errors.WithMetadata(baseErr,
+			errors.FaultCaller,
+			errors.StatusCode(400),
+			errors.Retryable)
+		require.NotNil(t, err)
+		require.Equal(t, errors.FaultCaller, errors.GetFault(err))
+		require.Equal(t, 400, errors.GetStatusCode(err))
+		require.True(t, errors.IsRetryable(err))
+	})
+
+	t.Run("NilError", func(t *testing.T) {
+		err := errors.WithMetadata(nil, errors.FaultInternal)
+		require.Nil(t, err)
+	})
+}
+
+func TestWithMetadata_Unwrap(t *testing.T) {
+	baseErr := pkgerrors.New("base error")
+	propsErr := errors.WithMetadata(baseErr, errors.FaultInternal)
+
+	t.Run("DirectUnwrap", func(t *testing.T) {
+		unwrapped := stderrors.Unwrap(propsErr)
+		require.Equal(t, baseErr, unwrapped)
+	})
+
+	t.Run("UnwrapThroughPkgErrors", func(t *testing.T) {
+		unwrapped := pkgerrors.Unwrap(propsErr)
+		require.Equal(t, baseErr, unwrapped)
+	})
+
+	t.Run("ErrorsIs", func(t *testing.T) {
+		require.True(t, stderrors.Is(propsErr, baseErr))
+		require.True(t, pkgerrors.Is(propsErr, baseErr))
+	})
+
+	t.Run("ErrorsAs", func(t *testing.T) {
+		// Wrap a StatusCoder with properties
+		statusErr := errors.NewStatusCoder(404, "not found")
+		propsErr := errors.WithMetadata(statusErr, errors.FaultCaller)
+
+		var sc *errors.StatusCoder
+		require.True(t, stderrors.As(propsErr, &sc))
+		require.Equal(t, 404, sc.Code)
+	})
+}
+
+func TestWithMetadata_PropertiesAndFields(t *testing.T) {
+	baseErr := pkgerrors.New("base error")
+
+	t.Run("SingleLayerBoth", func(t *testing.T) {
+		// Now properties and fields can be set in a single call
+		err := errors.WithMetadata(baseErr,
+			errors.FaultInternal,
+			errors.StatusCode(500),
+			"key", "value")
+
+		// All properties and fields accessible
+		require.Equal(t, errors.FaultInternal, errors.GetFault(err))
+		require.Equal(t, 500, errors.GetStatusCode(err))
+
+		fields := errors.GetFields(err).List()
+		require.Equal(t, []any{"key", "value"}, fields)
+
+		// Should unwrap properly
+		require.True(t, stderrors.Is(err, baseErr))
+	})
+
+	t.Run("MultipleLayers", func(t *testing.T) {
+		// Can also chain multiple WithMetadata calls
+		err1 := errors.WithMetadata(baseErr, "key1", "value1")
+		err2 := errors.WithMetadata(err1, errors.FaultInternal, errors.StatusCode(500), "key2", "value2")
+
+		// Properties accessible from outermost layer
+		require.Equal(t, errors.FaultInternal, errors.GetFault(err2))
+		require.Equal(t, 500, errors.GetStatusCode(err2))
+
+		// Fields collected from all layers
+		fields := errors.GetFields(err2).List()
+		require.Equal(t, []any{"key2", "value2", "key1", "value1"}, fields)
+
+		// Should unwrap through all layers
+		require.True(t, stderrors.Is(err2, baseErr))
+	})
+}
+
+func TestWithMetadata_MultipleLayersOfProperties(t *testing.T) {
+	baseErr := pkgerrors.New("base error")
+
+	// Stack multiple property layers - each setting a different property
+	err1 := errors.WithMetadata(baseErr, errors.FaultInternal)
+	err2 := errors.WithMetadata(err1, errors.StatusCode(500))
+	err3 := errors.WithMetadata(err2, errors.Retryable)
+
+	// Getters now traverse the entire chain, returning the first non-zero value
+	// This means properties set at any layer are accessible from the outermost error
+	require.Equal(t, errors.FaultInternal, errors.GetFault(err3)) // Found in err1 (inner layer)
+	require.Equal(t, 500, errors.GetStatusCode(err3))             // Found in err2 (middle layer)
+	require.True(t, errors.IsRetryable(err3))                     // Found in err3 (outer layer)
+
+	// Properties are still accessible when querying inner errors directly
+	require.Equal(t, errors.FaultInternal, errors.GetFault(err1))
+	require.Equal(t, 500, errors.GetStatusCode(err2))
+
+	// Should unwrap through all layers
+	require.True(t, stderrors.Is(err3, baseErr))
+	require.True(t, stderrors.Is(err3, err1))
+	require.True(t, stderrors.Is(err3, err2))
+}
+
+func TestWithMetadata_PropertyOverrides(t *testing.T) {
+	baseErr := pkgerrors.New("base error")
+
+	t.Run("OuterLayerOverridesInner", func(t *testing.T) {
+		// Set fault at inner layer
+		err1 := errors.WithMetadata(baseErr, errors.FaultInternal, errors.StatusCode(500))
+		// Override fault at outer layer
+		err2 := errors.WithMetadata(err1, errors.FaultCaller, "user_id", "123")
+
+		// Outer layer's explicit value should win
+		require.Equal(t, errors.FaultCaller, errors.GetFault(err2))
+		// StatusCode not set in outer layer, so inner layer's value is used
+		require.Equal(t, 500, errors.GetStatusCode(err2))
+
+		// Fields from outer layer should be present
+		fields := errors.GetFields(err2).List()
+		require.Equal(t, []any{"user_id", "123"}, fields)
+	})
+
+	t.Run("InnerLayerUsedWhenOuterNotSet", func(t *testing.T) {
+		// Set multiple properties at inner layer
+		err1 := errors.WithMetadata(baseErr,
+			errors.FaultInternal,
+			errors.StatusCode(500),
+			errors.Retryable)
+		// Outer layer only adds fields, no properties
+		err2 := errors.WithMetadata(err1, "key", "value")
+
+		// All inner properties should be accessible
+		require.Equal(t, errors.FaultInternal, errors.GetFault(err2))
+		require.Equal(t, 500, errors.GetStatusCode(err2))
+		require.True(t, errors.IsRetryable(err2))
+	})
+
+	t.Run("RetryabilityOverride", func(t *testing.T) {
+		// Mark as retryable at inner layer
+		err1 := errors.WithMetadata(baseErr, errors.Retryable)
+		// Override to non-retryable at outer layer
+		err2 := errors.WithMetadata(err1, errors.NonRetryable)
+
+		// Outer layer should win
+		require.False(t, errors.IsRetryable(err2))
+	})
+}
+
+func TestWithMetadata_IntegrationWithBuilder(t *testing.T) {
+	baseErr := pkgerrors.New("base error")
+
+	t.Run("BuilderSetMethod", func(t *testing.T) {
+		builder := errors.With(baseErr, "wrapped").
+			Set(errors.FaultInternal, errors.StatusCode(500), "key", "value")
+
+		// Extract the actual error from the builder
+		err := builder.Err()
+
+		// With the unified design, ALL properties and fields are accessible!
+		require.Equal(t, errors.FaultInternal, errors.GetFault(err))
+		require.Equal(t, 500, errors.GetStatusCode(err))
+
+		// Check fields
+		fields := errors.GetFields(err).List()
+		require.Equal(t, []any{"key", "value"}, fields)
+
+		// Check unwrapping works
+		require.Contains(t, err.Error(), "wrapped")
+		require.Contains(t, err.Error(), "base error")
+	})
+
+	t.Run("BuilderSetWithFields", func(t *testing.T) {
+		errfs := errors.Fields{"user", "alice", "action", "login"}
+		builder := errors.WithNew("auth failed").
+			Set(errors.FaultCaller, errors.StatusCode(403), errfs)
+
+		// Extract the actual error from the builder
+		err := builder.Err()
+
+		// Everything is accessible in a single layer!
+		require.Equal(t, errors.FaultCaller, errors.GetFault(err))
+		require.Equal(t, 403, errors.GetStatusCode(err))
+
+		// Check fields
+		fields := errors.GetFields(err).List()
+		require.Equal(t, []any{"user", "alice", "action", "login"}, fields)
+	})
+
+	t.Run("BuilderMultipleSets", func(t *testing.T) {
+		// Multiple Set() calls create layers, but getters traverse all layers
+		builder := errors.WithNew("auth failed").
+			Set(errors.FaultCaller, "user", "alice").
+			Set(errors.StatusCode(403), "action", "login")
+
+		err := builder.Err()
+
+		// Getters now traverse the entire chain to find properties
+		require.Equal(t, errors.FaultCaller, errors.GetFault(err)) // Found in inner layer
+		require.Equal(t, 403, errors.GetStatusCode(err))           // Found in outer layer
+
+		// All fields are collected from all layers
+		fields := errors.GetFields(err).List()
+		require.Equal(t, []any{"action", "login", "user", "alice"}, fields)
+	})
+
+	t.Run("BuilderAsError", func(t *testing.T) {
+		// Test that Builder can be used directly as an error
+		builder := errors.WithNew("test error").
+			Set(errors.FaultInternal, errors.StatusCode(500))
+
+		// Builder can be assigned to error interface
+		var err error = builder
+		require.NotNil(t, err)
+		require.Contains(t, err.Error(), "test error")
+
+		// Extract the actual error for property inspection
+		innerErr := builder.Err()
+		require.Equal(t, errors.FaultInternal, errors.GetFault(innerErr))
+		require.Equal(t, 500, errors.GetStatusCode(innerErr))
+	})
+}
+
+func TestWithMetadata_CompatibilityWithStdlib(t *testing.T) {
+	t.Run("WrapWithFmtErrorf", func(t *testing.T) {
+		baseErr := pkgerrors.New("base")
+		propsErr := errors.WithMetadata(baseErr, errors.FaultInternal)
+		wrappedErr := fmt.Errorf("wrapped: %w", propsErr)
+
+		// Should unwrap through fmt.Errorf wrapper
+		require.True(t, stderrors.Is(wrappedErr, baseErr))
+
+		// Properties should still be accessible
+		require.Equal(t, errors.FaultInternal, errors.GetFault(wrappedErr))
+	})
+
+	t.Run("JoinedErrors", func(t *testing.T) {
+		err1 := errors.WithMetadata(pkgerrors.New("error 1"), errors.FaultInternal)
+		err2 := errors.WithMetadata(pkgerrors.New("error 2"), errors.FaultCaller)
+		joined := stderrors.Join(err1, err2)
+
+		require.NotNil(t, joined)
+
+		// Should be able to find individual errors
+		require.True(t, stderrors.Is(joined, err1))
+		require.True(t, stderrors.Is(joined, err2))
+
+		// Properties extraction should work on individual errors
+		require.Equal(t, errors.FaultInternal, errors.GetFault(err1))
+		require.Equal(t, errors.FaultCaller, errors.GetFault(err2))
+	})
+}
+
 // Go 1.24 Standard Library Errors Package Compatibility Tests
 
 func TestStdlibErrorsAs_WithCustomTypes(t *testing.T) {
 	// Test standard library errors.As with our custom error types
 	statusErr := errors.NewStatusCoder(500, "internal error")
-	fieldErr := errors.WithFields(statusErr, "component", "database")
+	fieldErr := errors.WithMetadata(statusErr, "component", "database")
 	causeErr := errors.WithCause(statusErr, stderrors.New("connection failed"))
 	wrappedErr := fmt.Errorf("wrapped: %w", statusErr)
 
@@ -620,9 +902,9 @@ func TestStdlibErrorsAs_WithCustomTypes(t *testing.T) {
 	t.Run("CauseWrappedStatusCoder", func(t *testing.T) {
 		var sc *errors.StatusCoder
 		result := stderrors.As(causeErr, &sc)
-		// WithCause wraps errors in a way that doesn't expose the original StatusCoder to errors.As
-		require.False(t, result)
-		require.Nil(t, sc)
+		// WithCause now properly maintains the error chain, so StatusCoder is accessible
+		require.True(t, result)
+		require.Equal(t, 500, sc.Code)
 	})
 
 	t.Run("StdWrappedStatusCoder", func(t *testing.T) {
@@ -646,7 +928,7 @@ func TestStdlibErrorsIs_WithCustomTypes(t *testing.T) {
 	statusErr := errors.NewStatusCoder(404, "not found")
 	stdErr := stderrors.New("std error")
 
-	fieldErr := errors.WithFields(statusErr, "resource", "user")
+	fieldErr := errors.WithMetadata(statusErr, "resource", "user")
 	causeErr := errors.WithCause(statusErr, stdErr)
 	wrappedErr := fmt.Errorf("wrapped: %w", statusErr)
 
@@ -657,11 +939,11 @@ func TestStdlibErrorsIs_WithCustomTypes(t *testing.T) {
 		expect bool
 	}{
 		{"DirectMatch", statusErr, statusErr, true},
-		{"FieldWrappedMatch", fieldErr, statusErr, true},  // withFields properly implements unwrapping
-		{"CauseWrappedMatch", causeErr, statusErr, false}, // withCause has custom unwrapping
+		{"FieldWrappedMatch", fieldErr, statusErr, true}, // withMetadata properly implements unwrapping
+		{"CauseWrappedMatch", causeErr, statusErr, true}, // withCause now properly maintains chain
 		{"StdWrappedMatch", wrappedErr, statusErr, true},
 		{"NoMatch", statusErr, stdErr, false},
-		{"CauseToStdErr", causeErr, stdErr, true}, // Should find std error through cause
+		{"CauseToStdErr", causeErr, stdErr, false}, // stdErr not in Unwrap chain (only accessible via Cause())
 	}
 
 	for _, tt := range tests {
@@ -677,7 +959,7 @@ func TestStdlibErrorsUnwrap_WithCustomTypes(t *testing.T) {
 	statusErr := errors.NewStatusCoder(500, "server error")
 	stdErr := stderrors.New("underlying error")
 
-	fieldErr := errors.WithFields(statusErr, "key", "value")
+	fieldErr := errors.WithMetadata(statusErr, "key", "value")
 	causeErr := errors.WithCause(statusErr, stdErr)
 	stdWrappedErr := fmt.Errorf("wrapped: %w", statusErr)
 
@@ -688,7 +970,7 @@ func TestStdlibErrorsUnwrap_WithCustomTypes(t *testing.T) {
 	}{
 		{"StatusCoderNoUnwrap", statusErr, nil},
 		{"FieldErrUnwrap", fieldErr, statusErr},
-		{"CauseErrUnwrap", causeErr, stdErr}, // WithCause unwraps to cause, not wrapped error
+		{"CauseErrUnwrap", causeErr, statusErr}, // WithCause now unwraps to wrapper (statusErr)
 		{"StdWrappedUnwrap", stdWrappedErr, statusErr},
 	}
 
@@ -704,7 +986,7 @@ func TestStdlibErrorsJoin_WithCustomTypes(t *testing.T) {
 	// Test Go 1.20+ errors.Join with our custom error types
 	statusErr := errors.NewStatusCoder(400, "bad request")
 	stdErr := stderrors.New("validation failed")
-	fieldErr := errors.WithFields(stderrors.New("database error"), "table", "users")
+	fieldErr := errors.WithMetadata(stderrors.New("database error"), "table", "users")
 
 	// Join multiple error types
 	joinedErr := stderrors.Join(statusErr, stdErr, fieldErr)
@@ -732,23 +1014,28 @@ func TestComplexStdlibErrorChains(t *testing.T) {
 	baseStdErr := stderrors.New("connection timeout")
 	statusErr := errors.NewStatusCoder(503, "service unavailable")
 
-	// Chain: fmt.Errorf -> WithFields -> WithCause -> stdlib error
+	// Chain: fmt.Errorf -> WithMetadata -> WithCause -> stdlib error
 	level1 := fmt.Errorf("service failed: %w", statusErr)
-	level2 := errors.WithFields(level1, "service", "auth", "retry_count", 3)
+	level2 := errors.WithMetadata(level1, "service", "auth", "retry_count", 3)
 	level3 := errors.WithCause(level2, baseStdErr)
 
-	// Test errors.As works through the chain - but WithCause breaks the chain
+	// Test errors.As works through the chain - WithCause now maintains the chain
 	var sc *errors.StatusCoder
 	result := stderrors.As(level3, &sc)
-	// The WithCause at level3 prevents errors.As from finding the StatusCoder
-	require.False(t, result)
+	require.True(t, result)
+	require.Equal(t, 503, sc.Code)
 
-	// Test field extraction works - but WithCause breaks the field chain too
+	// Test field extraction works - WithCause now maintains the field chain
 	fields := errors.GetFields(level3).List()
-	require.Empty(t, fields) // WithCause prevents field extraction from level2
+	require.Equal(t, []any{"service", "auth", "retry_count", 3}, fields)
 
-	// Test that we can find the base error through cause unwrapping
-	require.Equal(t, baseStdErr, stderrors.Unwrap(level3))
+	// Test that Unwrap returns the wrapper (level2), not the cause
+	require.Equal(t, level2, stderrors.Unwrap(level3))
+
+	// Test that we can still access the cause via Cause() method
+	causer, ok := level3.(interface{ Cause() error })
+	require.True(t, ok)
+	require.Equal(t, baseStdErr, causer.Cause())
 
 	// Test error message composition
 	errMsg := level3.Error()
@@ -770,7 +1057,7 @@ func TestStdlibErrorCompatibility_EdgeCases(t *testing.T) {
 	t.Run("ErrorInterfaceImplementation", func(t *testing.T) {
 		// Verify our custom types properly implement error interface
 		statusErr := errors.NewStatusCoder(200, "ok")
-		fieldErr := errors.WithFields(statusErr, "test", true)
+		fieldErr := errors.WithMetadata(statusErr, "test", true)
 		causeErr := errors.WithCause(statusErr, stderrors.New("cause"))
 
 		// All should be assignable to error interface
@@ -786,7 +1073,7 @@ func TestStdlibErrorCompatibility_EdgeCases(t *testing.T) {
 	t.Run("UnwrapperInterfaceCompliance", func(t *testing.T) {
 		// Test that our types implement the Unwrapper interface correctly
 		baseErr := stderrors.New("base")
-		fieldErr := errors.WithFields(baseErr, "key", "value")
+		fieldErr := errors.WithMetadata(baseErr, "key", "value")
 		causeErr := errors.WithCause(stderrors.New("wrapper"), baseErr)
 
 		// Test interface compliance
