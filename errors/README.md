@@ -1,8 +1,8 @@
-# Structured Error Handling Library
+# Strucured Error Handling Library
 
 ## Overview
 
-This errors library provides a builder pattern for creating richly annotated errors with three orthogonal dimensions of metadata:
+This library provides a builder pattern for creating richly annotated errors with three orthogonal dimensions of metadata:
 
 1. **Fields**: Key-value pairs for structured logging (compatible with zerolog, zap, log/slog)
 2. **Properties**: Machine-readable attributes for control flow (Fault, Retryability, StatusCode)
@@ -15,13 +15,29 @@ The library extends `github.com/pkg/errors` with these capabilities while mainta
 ### Builder Pattern
 
 ```go
-// Wrap an existing error with a message, then add properties and fields
-return errors.With(err, "failed to call legacy auth service").
-    Set(errors.FaultInternal, errfs)
+// Wrap an existing error with a message and optional format arguments, then add properties and fields
+errfs := errors.Fields{
+    "method", "GET",
+    "duration", time.Now().Sub(startTime),
+}
 
-// Create a new error and add properties
-return errors.WithNew("invalid API key").
-    Set(errors.FaultCaller, errors.StatusCode(resp.StatusCode), errfs)
+// ... 
+
+return errors.With(err, "failed to call legacy auth service (time: %v)", time.Now()).Set(
+    errors.FaultInternal,
+    errfs,
+    "url", url,
+    "username", username,
+)
+
+// Create a new error with optional format arguments, then add properties and fields
+return errors.WithNew("invalid API key (time: %v)", time.Now()).Set(
+    errors.FaultCaller,
+    errors.StatusCode(resp.StatusCode),
+    errfs,
+    "url", url,
+    "username", username,
+)
 ```
 
 ### Properties
@@ -112,8 +128,12 @@ func (c *ProxyAuthClient) ValidateAPIKey(apiKey string) (*ProxyAuthResponse, err
     if err != nil {
         // Internal fault: system failed to create request -- can
         // reliably translate this to an HTTP 500 error
-        return nil, errors.With(err, "failed to create request").
-            Set(errors.FaultInternal, errfs)
+        return nil, errors.With(err, "failed to create request").Set(
+            errors.FaultInternal,
+            errfs,
+            "method", "GET",
+            "time", time.Now(),
+        )
     }
 
     resp, err := c.HTTPClient.Do(req)
@@ -121,8 +141,7 @@ func (c *ProxyAuthClient) ValidateAPIKey(apiKey string) (*ProxyAuthResponse, err
         // Internal fault: network/connectivity issue -- can reliably translate
         // this to an HTTP 500 error.  Could also be marked `retryable`, allowing
         // the API layer to assign the appropriate error code + message.
-        return nil, errors.With(err, "failed to call legacy auth service").
-            Set(errors.FaultInternal, errfs)
+        return nil, errors.With(err, "failed to call legacy auth service").Set(errors.FaultInternal, errfs)
     }
     defer resp.Body.Close()
 
@@ -131,28 +150,33 @@ func (c *ProxyAuthClient) ValidateAPIKey(apiKey string) (*ProxyAuthResponse, err
 
     if resp.StatusCode == http.StatusUnauthorized {
         // Caller fault: provided invalid credentials
-        return nil, errors.WithNew("invalid API key").
-            Set(errors.FaultCaller, errors.StatusCode(resp.StatusCode), errfs)
+        return nil, errors.WithNew("invalid API key").Set(
+            errors.FaultCaller,
+            errors.StatusCode(resp.StatusCode),
+            errfs,
+        )
     }
 
     if resp.StatusCode != http.StatusOK {
         // Internal fault: unexpected response from upstream service
-        return nil, errors.WithNew("unexpected status code from legacy service").
-            Set(errors.FaultInternal, errfs)
+        return nil, errors.WithNew("unexpected status code from legacy service").Set(
+            errors.FaultInternal,
+            errfs
+            errors.StatusCode(resp.StatusCode),
+            "username", username,
+        )
     }
 
     var resp ProxyAuthResponse
     if err := json.Unmarshal(bodyBytes, &resp); err != nil {
         // Internal fault: malformed response from upstream
-        return nil, errors.With(err, "failed to decode response").
-            Set(errors.FaultInternal, errfs)
+        return nil, errors.With(err, "failed to decode response").Set(errors.FaultInternal, errfs)
     }
 
     if !resp.AccountIsActive() {
         errfs.Add("user_status", resp.Status)
         // Caller fault: valid key but inactive account
-        return nil, errors.WithNew("API key is not valid").
-            Set(errors.FaultCaller, errfs)
+        return nil, errors.WithNew("API key is not valid").Set(errors.FaultCaller, errfs)
     }
 
     return &resp, nil

@@ -3,6 +3,7 @@ package errors
 import (
 	"fmt"
 	"io"
+	"net/http"
 
 	"github.com/pkg/errors"
 )
@@ -24,6 +25,17 @@ const (
 )
 
 type StatusCode int
+
+var (
+	ErrBadRequest          = WithNew("bad request").Set(StatusCode(http.StatusBadRequest))
+	ErrUnauthorized        = WithNew("unauthorized").Set(StatusCode(http.StatusUnauthorized))
+	ErrForbidden           = WithNew("forbidden").Set(StatusCode(http.StatusForbidden))
+	ErrNotFound            = WithNew("not found").Set(StatusCode(http.StatusNotFound))
+	ErrTooManyRequests     = WithNew("too many requests").Set(StatusCode(http.StatusTooManyRequests))
+	ErrInternalServerError = WithNew("internal server error").Set(StatusCode(http.StatusInternalServerError))
+	ErrUnimplemented       = WithNew("not implemented").Set(StatusCode(http.StatusNotImplemented))
+	ErrServiceUnavailable  = WithNew("service unavailable").Set(StatusCode(http.StatusServiceUnavailable))
+)
 
 // Fields represents structured key-value pairs for logging. Fields are formatted
 // as logfmt when the error is printed: "error message key1=value1 key2="quoted value"".
@@ -135,6 +147,10 @@ func (wm *withMetadata) Format(s fmt.State, verb rune) {
 	}
 }
 
+type unwrapper interface {
+	Unwrap() error
+}
+
 // IsRetryable traverses the error chain looking for a Retryable marker.
 // Returns true only if Retryable is explicitly set somewhere in the chain.
 func IsRetryable(err error) bool {
@@ -149,7 +165,7 @@ func IsRetryable(err error) bool {
 			err = wm.parent
 		} else {
 			// Try unwrapping via standard Unwrap() method
-			unwrapper, ok := err.(interface{ Unwrap() error })
+			unwrapper, ok := err.(unwrapper)
 			if !ok {
 				break
 			}
@@ -161,6 +177,7 @@ func IsRetryable(err error) bool {
 
 // GetStatusCode traverses the error chain and returns the first non-zero status code found.
 // Outer layers override inner layers when explicitly set.
+// Supports errors.Join by checking multiple unwrapped errors.
 func GetStatusCode(err error) int {
 	for err != nil {
 		if wm, ok := err.(*withMetadata); ok {
@@ -169,8 +186,18 @@ func GetStatusCode(err error) int {
 			}
 			err = wm.parent
 		} else {
-			// Try unwrapping via standard Unwrap() method
-			unwrapper, ok := err.(interface{ Unwrap() error })
+			// Try unwrapping via multi-error Unwrap() []error (e.g., errors.Join)
+			if multiUnwrapper, ok := err.(interface{ Unwrap() []error }); ok {
+				for _, e := range multiUnwrapper.Unwrap() {
+					if code := GetStatusCode(e); code != 0 {
+						return code
+					}
+				}
+				return 0
+			}
+
+			// Try unwrapping via standard Unwrap() error
+			unwrapper, ok := err.(unwrapper)
 			if !ok {
 				break
 			}
@@ -191,7 +218,7 @@ func GetFault(err error) Fault {
 			err = wm.parent
 		} else {
 			// Try unwrapping via standard Unwrap() method
-			unwrapper, ok := err.(interface{ Unwrap() error })
+			unwrapper, ok := err.(unwrapper)
 			if !ok {
 				break
 			}

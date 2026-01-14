@@ -13,130 +13,13 @@ import (
 	"github.com/brynbellomy/go-utils/errors"
 )
 
-// StatusCoder Tests
-
-func TestNewStatusCoder(t *testing.T) {
-	tests := []struct {
-		name    string
-		code    int
-		message string
-	}{
-		{"BadRequest", 400, "bad request"},
-		{"NotFound", 404, "not found"},
-		{"InternalServerError", 500, "internal server error"},
-		{"CustomCode", 999, "custom error"},
-		{"EmptyMessage", 200, ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := errors.NewStatusCoder(tt.code, tt.message)
-			require.NotNil(t, err)
-			require.Equal(t, tt.code, err.Code)
-			require.Equal(t, tt.message, err.Message)
-		})
-	}
-}
-
-func TestStatusCoder_Error(t *testing.T) {
-	tests := []struct {
-		name     string
-		code     int
-		message  string
-		expected string
-	}{
-		{"Standard", 404, "not found", "404: not found"},
-		{"WithSpaces", 400, "bad request", "400: bad request"},
-		{"EmptyMessage", 200, "", "200: "},
-		{"ZeroCode", 0, "zero error", "0: zero error"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := errors.NewStatusCoder(tt.code, tt.message)
-			require.Equal(t, tt.expected, err.Error())
-		})
-	}
-}
-
-func TestAsStatusCoder(t *testing.T) {
-	statusErr := errors.NewStatusCoder(404, "not found")
-	regularErr := pkgerrors.New("regular error")
-	wrappedStatusErr := pkgerrors.Wrap(statusErr, "wrapped")
-
-	tests := []struct {
-		name     string
-		err      error
-		expected *errors.StatusCoder
-		ok       bool
-	}{
-		{"StatusCoder", statusErr, statusErr, true},
-		{"RegularError", regularErr, nil, false},
-		{"WrappedStatusCoder", wrappedStatusErr, statusErr, true},
-		{"NilError", nil, nil, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, ok := errors.AsStatusCoder(tt.err)
-			require.Equal(t, tt.ok, ok)
-			require.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestIsStatusCoder(t *testing.T) {
-	statusErr404 := errors.NewStatusCoder(404, "not found")
-	regularErr := pkgerrors.New("regular error")
-	wrappedStatusErr := pkgerrors.Wrap(statusErr404, "wrapped")
-
-	tests := []struct {
-		name     string
-		err      error
-		codes    []int
-		expected bool
-	}{
-		{"NoCodesStatusCoder", statusErr404, []int{}, true},
-		{"NoCodesRegularError", regularErr, []int{}, false},
-		{"SingleMatchingCode", statusErr404, []int{404}, true},
-		{"SingleNonMatchingCode", statusErr404, []int{500}, false},
-		{"MultipleCodesWithMatch", statusErr404, []int{400, 404, 500}, true},
-		{"MultipleCodesNoMatch", statusErr404, []int{400, 500}, false},
-		{"WrappedStatusCoder", wrappedStatusErr, []int{404}, true},
-		{"NilError", nil, []int{404}, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := errors.IsStatusCoder(tt.err, tt.codes...)
-			require.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestPredefinedHTTPErrors(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      *errors.StatusCoder
-		code     int
-		contains string
-	}{
-		{"BadRequest", errors.ErrBadRequest, http.StatusBadRequest, "bad"},
-		{"Unauthorized", errors.ErrUnauthorized, http.StatusUnauthorized, "unauthorized"},
-		{"Forbidden", errors.ErrForbidden, http.StatusForbidden, "forbidden"},
-		{"NotFound", errors.ErrNotFound, http.StatusNotFound, "not found"},
-		{"TooManyRequests", errors.ErrTooManyRequests, http.StatusTooManyRequests, "too many"},
-		{"InternalServerError", errors.ErrInternalServerError, http.StatusInternalServerError, "internal"},
-		{"Unimplemented", errors.ErrUnimplemented, http.StatusNotImplemented, "not implemented"},
-		{"ServiceUnavailable", errors.ErrServiceUnavailable, http.StatusServiceUnavailable, "unavailable"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.code, tt.err.Code)
-			require.Contains(t, tt.err.Message, tt.contains)
-		})
-	}
+func TestBuilderWithStatusCode(t *testing.T) {
+	var errfields errors.Fields
+	errfields.Add("foo", "bar")
+	cause := errors.New("blah")
+	baseErr := errors.WithMetadata(errors.New("internal server error"), errors.StatusCode(http.StatusInternalServerError))
+	err := errors.With(baseErr, "could not store artifact").Cause(cause).Set(errfields)
+	require.Equal(t, http.StatusInternalServerError, errors.GetStatusCode(err))
 }
 
 // WithCause Tests
@@ -475,9 +358,9 @@ func TestReExportedFunctions(t *testing.T) {
 // Integration and Edge Case Tests
 
 func TestComplexErrorChain(t *testing.T) {
-	// Test combining StatusCoder, WithCause, and WithMetadata
+	// Test combining WithMetadata with StatusCode, WithCause, and fields
 	baseErr := pkgerrors.New("database timeout")
-	statusErr := errors.NewStatusCoder(500, "internal error")
+	statusErr := errors.WithMetadata(errors.New("internal error"), errors.StatusCode(500))
 	causeErr := errors.WithCause(statusErr, baseErr)
 	fieldErr := errors.WithMetadata(causeErr, "user_id", 123, "operation", "read")
 
@@ -485,10 +368,8 @@ func TestComplexErrorChain(t *testing.T) {
 	require.Contains(t, fieldErr.Error(), "internal error")
 	require.Contains(t, fieldErr.Error(), "database timeout")
 
-	// Test StatusCoder extraction directly from statusErr
-	extracted, ok := errors.AsStatusCoder(statusErr)
-	require.True(t, ok)
-	require.Equal(t, 500, extracted.Code)
+	// Test status code extraction
+	require.Equal(t, 500, errors.GetStatusCode(fieldErr))
 
 	// Test fields extraction
 	fields := errors.GetFields(fieldErr).List()
@@ -500,35 +381,33 @@ func TestComplexErrorChain(t *testing.T) {
 
 func TestStandardLibraryCompatibility(t *testing.T) {
 	// Test compatibility with standard library pkgerrors.As and pkgerrors.Is
-	statusErr := errors.NewStatusCoder(404, "not found")
+	baseErr := errors.New("not found")
+	statusErr := errors.WithMetadata(baseErr, errors.StatusCode(404))
 	wrappedErr := pkgerrors.Wrap(statusErr, "wrapped")
 	fieldErr := errors.WithMetadata(wrappedErr, "resource", "user")
 
-	// Test pkgerrors.As with StatusCoder
-	var sc *errors.StatusCoder
-	require.True(t, pkgerrors.As(fieldErr, &sc))
-	require.Equal(t, 404, sc.Code)
+	// Test status code extraction through wrapper chain
+	require.Equal(t, 404, errors.GetStatusCode(fieldErr))
+	require.Equal(t, 404, errors.GetStatusCode(wrappedErr))
 
 	// Test pkgerrors.Is behavior - since our errors use standard unwrapping,
-	// this should actually work for direct comparisons
+	// this should work for direct comparisons
 	require.True(t, pkgerrors.Is(wrappedErr, statusErr))
 	// And also work for field-wrapped errors due to proper unwrapping chain
 	require.True(t, pkgerrors.Is(fieldErr, statusErr))
+	require.True(t, pkgerrors.Is(fieldErr, baseErr))
 }
 
 func TestNilAndZeroValues(t *testing.T) {
-	t.Run("NilStatusCoder", func(t *testing.T) {
-		var sc *errors.StatusCoder
-		// Test passing nil error to AsStatusCoder
-		extracted, ok := errors.AsStatusCoder(nil)
-		require.False(t, ok)
-		require.Nil(t, extracted)
-		_ = sc // Use sc to avoid unused variable
+	t.Run("GetStatusCodeNil", func(t *testing.T) {
+		// Test getting status code from nil error
+		require.Equal(t, 0, errors.GetStatusCode(nil))
 	})
 
-	t.Run("ZeroValueStatusCoder", func(t *testing.T) {
-		sc := &errors.StatusCoder{}
-		require.Equal(t, "0: ", sc.Error())
+	t.Run("GetStatusCodeNoStatusCode", func(t *testing.T) {
+		// Test getting status code from error without status code
+		err := errors.New("some error")
+		require.Equal(t, 0, errors.GetStatusCode(err))
 	})
 
 	t.Run("WithCauseNilCause", func(t *testing.T) {
@@ -578,7 +457,7 @@ func TestErrorUnwrappingChain(t *testing.T) {
 
 func TestConcurrentAccess(t *testing.T) {
 	// Test that our error types are safe for concurrent access
-	statusErr := errors.NewStatusCoder(500, "server error")
+	statusErr := errors.WithMetadata(errors.New("server error"), errors.StatusCode(500))
 	fieldErr := errors.WithMetadata(statusErr, "concurrent", true)
 
 	done := make(chan bool, 10)
@@ -593,9 +472,8 @@ func TestConcurrentAccess(t *testing.T) {
 			fields := errors.GetFields(fieldErr).List()
 			require.Equal(t, []any{"concurrent", true}, fields)
 
-			extracted, ok := errors.AsStatusCoder(fieldErr)
-			require.True(t, ok)
-			require.Equal(t, 500, extracted.Code)
+			statusCode := errors.GetStatusCode(fieldErr)
+			require.Equal(t, 500, statusCode)
 		}(i)
 	}
 
@@ -654,13 +532,14 @@ func TestWithMetadata_Unwrap(t *testing.T) {
 	})
 
 	t.Run("ErrorsAs", func(t *testing.T) {
-		// Wrap a StatusCoder with properties
-		statusErr := errors.NewStatusCoder(404, "not found")
+		// Test that status codes are accessible through property wrappers
+		statusErr := errors.WithMetadata(errors.New("not found"), errors.StatusCode(404))
 		propsErr := errors.WithMetadata(statusErr, errors.FaultCaller)
 
-		var sc *errors.StatusCoder
-		require.True(t, stderrors.As(propsErr, &sc))
-		require.Equal(t, 404, sc.Code)
+		// Status code should be accessible through the chain
+		require.Equal(t, 404, errors.GetStatusCode(propsErr))
+		// Fault from outer layer should be accessible
+		require.Equal(t, errors.FaultCaller, errors.GetFault(propsErr))
 	})
 }
 
@@ -879,43 +758,31 @@ func TestWithMetadata_CompatibilityWithStdlib(t *testing.T) {
 // Go 1.24 Standard Library Errors Package Compatibility Tests
 
 func TestStdlibErrorsAs_WithCustomTypes(t *testing.T) {
-	// Test standard library errors.As with our custom error types
-	statusErr := errors.NewStatusCoder(500, "internal error")
+	// Test status code extraction through various error wrappers
+	statusErr := errors.WithMetadata(errors.New("internal error"), errors.StatusCode(500))
 	fieldErr := errors.WithMetadata(statusErr, "component", "database")
 	causeErr := errors.WithCause(statusErr, stderrors.New("connection failed"))
 	wrappedErr := fmt.Errorf("wrapped: %w", statusErr)
 
-	t.Run("DirectStatusCoder", func(t *testing.T) {
-		var sc *errors.StatusCoder
-		result := stderrors.As(statusErr, &sc)
-		require.True(t, result)
-		require.Equal(t, 500, sc.Code)
+	t.Run("DirectStatusCode", func(t *testing.T) {
+		require.Equal(t, 500, errors.GetStatusCode(statusErr))
 	})
 
-	t.Run("FieldWrappedStatusCoder", func(t *testing.T) {
-		var sc *errors.StatusCoder
-		result := stderrors.As(fieldErr, &sc)
-		require.True(t, result)
-		require.Equal(t, 500, sc.Code)
+	t.Run("FieldWrappedStatusCode", func(t *testing.T) {
+		require.Equal(t, 500, errors.GetStatusCode(fieldErr))
 	})
 
-	t.Run("CauseWrappedStatusCoder", func(t *testing.T) {
-		var sc *errors.StatusCoder
-		result := stderrors.As(causeErr, &sc)
-		// WithCause now properly maintains the error chain, so StatusCoder is accessible
-		require.True(t, result)
-		require.Equal(t, 500, sc.Code)
+	t.Run("CauseWrappedStatusCode", func(t *testing.T) {
+		// WithCause properly maintains the error chain, so status code is accessible
+		require.Equal(t, 500, errors.GetStatusCode(causeErr))
 	})
 
-	t.Run("StdWrappedStatusCoder", func(t *testing.T) {
-		var sc *errors.StatusCoder
-		result := stderrors.As(wrappedErr, &sc)
-		require.True(t, result)
-		require.Equal(t, 500, sc.Code)
+	t.Run("StdWrappedStatusCode", func(t *testing.T) {
+		require.Equal(t, 500, errors.GetStatusCode(wrappedErr))
 	})
 
 	t.Run("NonMatchingType", func(t *testing.T) {
-		// Test with a built-in error type that doesn't match
+		// Test with a built-in error type
 		var pe *os.PathError
 		result := stderrors.As(statusErr, &pe)
 		require.False(t, result)
@@ -925,7 +792,8 @@ func TestStdlibErrorsAs_WithCustomTypes(t *testing.T) {
 
 func TestStdlibErrorsIs_WithCustomTypes(t *testing.T) {
 	// Test standard library errors.Is with our custom error types
-	statusErr := errors.NewStatusCoder(404, "not found")
+	baseErr := errors.New("not found")
+	statusErr := errors.WithMetadata(baseErr, errors.StatusCode(404))
 	stdErr := stderrors.New("std error")
 
 	fieldErr := errors.WithMetadata(statusErr, "resource", "user")
@@ -939,6 +807,7 @@ func TestStdlibErrorsIs_WithCustomTypes(t *testing.T) {
 		expect bool
 	}{
 		{"DirectMatch", statusErr, statusErr, true},
+		{"DirectMatchBase", statusErr, baseErr, true},
 		{"FieldWrappedMatch", fieldErr, statusErr, true}, // withMetadata properly implements unwrapping
 		{"CauseWrappedMatch", causeErr, statusErr, true}, // withCause now properly maintains chain
 		{"StdWrappedMatch", wrappedErr, statusErr, true},
@@ -956,7 +825,8 @@ func TestStdlibErrorsIs_WithCustomTypes(t *testing.T) {
 
 func TestStdlibErrorsUnwrap_WithCustomTypes(t *testing.T) {
 	// Test standard library errors.Unwrap with our custom error types
-	statusErr := errors.NewStatusCoder(500, "server error")
+	baseErr := errors.New("server error")
+	statusErr := errors.WithMetadata(baseErr, errors.StatusCode(500))
 	stdErr := stderrors.New("underlying error")
 
 	fieldErr := errors.WithMetadata(statusErr, "key", "value")
@@ -968,7 +838,7 @@ func TestStdlibErrorsUnwrap_WithCustomTypes(t *testing.T) {
 		err      error
 		expected error
 	}{
-		{"StatusCoderNoUnwrap", statusErr, nil},
+		{"WithMetadataUnwrap", statusErr, baseErr},
 		{"FieldErrUnwrap", fieldErr, statusErr},
 		{"CauseErrUnwrap", causeErr, statusErr}, // WithCause now unwraps to wrapper (statusErr)
 		{"StdWrappedUnwrap", stdWrappedErr, statusErr},
@@ -984,7 +854,7 @@ func TestStdlibErrorsUnwrap_WithCustomTypes(t *testing.T) {
 
 func TestStdlibErrorsJoin_WithCustomTypes(t *testing.T) {
 	// Test Go 1.20+ errors.Join with our custom error types
-	statusErr := errors.NewStatusCoder(400, "bad request")
+	statusErr := errors.WithMetadata(errors.New("bad request"), errors.StatusCode(400))
 	stdErr := stderrors.New("validation failed")
 	fieldErr := errors.WithMetadata(stderrors.New("database error"), "table", "users")
 
@@ -997,10 +867,8 @@ func TestStdlibErrorsJoin_WithCustomTypes(t *testing.T) {
 	require.True(t, stderrors.Is(joinedErr, stdErr))
 	require.True(t, stderrors.Is(joinedErr, fieldErr))
 
-	// Test that errors.As works with joined errors
-	var sc *errors.StatusCoder
-	require.True(t, stderrors.As(joinedErr, &sc))
-	require.Equal(t, 400, sc.Code)
+	// Test that GetStatusCode works with joined errors
+	require.Equal(t, 400, errors.GetStatusCode(joinedErr))
 
 	// Test error message contains all joined errors
 	errMsg := joinedErr.Error()
@@ -1012,18 +880,15 @@ func TestStdlibErrorsJoin_WithCustomTypes(t *testing.T) {
 func TestComplexStdlibErrorChains(t *testing.T) {
 	// Test complex error chains mixing stdlib and custom errors
 	baseStdErr := stderrors.New("connection timeout")
-	statusErr := errors.NewStatusCoder(503, "service unavailable")
+	statusErr := errors.WithMetadata(errors.New("service unavailable"), errors.StatusCode(503))
 
 	// Chain: fmt.Errorf -> WithMetadata -> WithCause -> stdlib error
 	level1 := fmt.Errorf("service failed: %w", statusErr)
 	level2 := errors.WithMetadata(level1, "service", "auth", "retry_count", 3)
 	level3 := errors.WithCause(level2, baseStdErr)
 
-	// Test errors.As works through the chain - WithCause now maintains the chain
-	var sc *errors.StatusCoder
-	result := stderrors.As(level3, &sc)
-	require.True(t, result)
-	require.Equal(t, 503, sc.Code)
+	// Test GetStatusCode works through the chain - WithCause now maintains the chain
+	require.Equal(t, 503, errors.GetStatusCode(level3))
 
 	// Test field extraction works - WithCause now maintains the field chain
 	fields := errors.GetFields(level3).List()
@@ -1050,13 +915,12 @@ func TestStdlibErrorCompatibility_EdgeCases(t *testing.T) {
 		// Standard library should handle nil errors gracefully
 		require.Nil(t, stderrors.Unwrap(nil))
 		require.False(t, stderrors.Is(nil, stderrors.New("test")))
-		var sc *errors.StatusCoder
-		require.False(t, stderrors.As(nil, &sc))
+		require.Equal(t, 0, errors.GetStatusCode(nil))
 	})
 
 	t.Run("ErrorInterfaceImplementation", func(t *testing.T) {
 		// Verify our custom types properly implement error interface
-		statusErr := errors.NewStatusCoder(200, "ok")
+		statusErr := errors.WithMetadata(errors.New("ok"), errors.StatusCode(200))
 		fieldErr := errors.WithMetadata(statusErr, "test", true)
 		causeErr := errors.WithCause(statusErr, stderrors.New("cause"))
 

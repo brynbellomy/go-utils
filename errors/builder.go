@@ -53,6 +53,15 @@ func (b *Builder) Err() error {
 	return b.error
 }
 
+// Unwrap returns the underlying error, implementing the Go 1.13+ error unwrapping interface.
+// This allows functions like GetStatusCode to traverse through Builder instances.
+func (b *Builder) Unwrap() error {
+	if b == nil {
+		return nil
+	}
+	return b.error
+}
+
 func (b *Builder) Wrap(msg string) *Builder {
 	if b == nil {
 		return nil
