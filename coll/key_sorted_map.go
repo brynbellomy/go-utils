@@ -1,14 +1,12 @@
-package utils
+package bcoll
 
 import (
 	"cmp"
-	"fmt"
+	"iter"
 )
 
-// SortedMap is a map that maintains keys in sorted order.
-
-// SortedMap is a map that maintains keys in sorted order.
-type SortedMap[K cmp.Ordered, V any] struct {
+// KeySortedMap is a map that maintains keys in sorted order.
+type KeySortedMap[K cmp.Ordered, V any] struct {
 	root   *node[K, V]
 	length int
 }
@@ -20,20 +18,20 @@ type node[K cmp.Ordered, V any] struct {
 	right *node[K, V]
 }
 
-func NewSortedMap[K cmp.Ordered, V any]() *SortedMap[K, V] {
-	return &SortedMap[K, V]{}
+func NewKeySortedMap[K cmp.Ordered, V any]() *KeySortedMap[K, V] {
+	return &KeySortedMap[K, V]{}
 }
 
-func (sm *SortedMap[K, V]) Clear() {
+func (sm *KeySortedMap[K, V]) Clear() {
 	sm.root = nil
 	sm.length = 0
 }
 
-func (sm *SortedMap[K, V]) Len() int {
+func (sm *KeySortedMap[K, V]) Len() int {
 	return sm.length
 }
 
-func (sm *SortedMap[K, V]) Insert(key K, value V) {
+func (sm *KeySortedMap[K, V]) Insert(key K, value V) {
 	sm.length++
 
 	if sm.root == nil {
@@ -62,7 +60,7 @@ func (sm *SortedMap[K, V]) Insert(key K, value V) {
 	}
 }
 
-func (sm *SortedMap[K, V]) Get(key K) (V, bool) {
+func (sm *KeySortedMap[K, V]) Get(key K) (V, bool) {
 	current := sm.root
 	for current != nil {
 		if key < current.key {
@@ -77,7 +75,7 @@ func (sm *SortedMap[K, V]) Get(key K) (V, bool) {
 	return zero, false
 }
 
-func (sm *SortedMap[K, V]) Iter() func(yield func(k K, v V) bool) {
+func (sm *KeySortedMap[K, V]) Iter() iter.Seq2[K, V] {
 	return func(yield func(k K, v V) bool) {
 		stack := []*node[K, V]{}
 		current := sm.root
@@ -105,7 +103,7 @@ func (sm *SortedMap[K, V]) Iter() func(yield func(k K, v V) bool) {
 	}
 }
 
-func (sm *SortedMap[K, V]) ReverseIter() func(yield func(k K, v V) bool) {
+func (sm *KeySortedMap[K, V]) ReverseIter() iter.Seq2[K, V] {
 	return func(yield func(k K, v V) bool) {
 		stack := []*node[K, V]{}
 		current := sm.root
@@ -134,56 +132,11 @@ func (sm *SortedMap[K, V]) ReverseIter() func(yield func(k K, v V) bool) {
 	}
 }
 
-func (sm *SortedMap[K, V]) Keys() []K {
+func (sm *KeySortedMap[K, V]) Keys() []K {
 	xs := make([]K, sm.length)
 	i := 0
 	for x := range sm.Iter() {
 		xs[i] = x
 	}
 	return xs
-}
-
-type SortedSet[K cmp.Ordered] SortedMap[K, struct{}]
-
-func NewSortedSet[K cmp.Ordered]() *SortedSet[K] {
-	return &SortedSet[K]{}
-}
-
-func (ss *SortedSet[K]) Clear() {
-	(*SortedMap[K, struct{}])(ss).Clear()
-}
-
-func (ss *SortedSet[K]) Len() int {
-	return (*SortedMap[K, struct{}])(ss).Len()
-}
-
-func (ss *SortedSet[K]) Insert(key K) {
-	(*SortedMap[K, struct{}])(ss).Insert(key, struct{}{})
-}
-
-func (ss *SortedSet[K]) Has(key K) bool {
-	_, ok := (*SortedMap[K, struct{}])(ss).Get(key)
-	return ok
-}
-
-func (ss *SortedSet[K]) Iter() func(yield func(k K) bool) {
-	return func(yield func(k K) bool) {
-		for k := range (*SortedMap[K, struct{}])(ss).Iter() {
-			if !yield(k) {
-				return
-			}
-		}
-	}
-}
-
-func (ss *SortedSet[K]) ReverseIter() func(yield func(k K, v struct{}) bool) {
-	return (*SortedMap[K, struct{}])(ss).ReverseIter()
-}
-
-func (ss *SortedSet[K]) Slice() []K {
-	return (*SortedMap[K, struct{}])(ss).Keys()
-}
-
-func (ss *SortedSet[K]) String() string {
-	return fmt.Sprint(ss.Slice())
 }

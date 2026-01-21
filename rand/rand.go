@@ -1,4 +1,4 @@
-package utils
+package rand
 
 import (
 	"math/rand"
@@ -11,7 +11,7 @@ func RandomNumberString() string {
 	return strconv.Itoa(rand.Intn(8999) + 1000)
 }
 
-func RandomBytes(n int) ([]byte, error) {
+func RandomBytesUnsafe(n int) ([]byte, error) {
 	b := make([]byte, n)
 	_, err := rand.Read(b)
 	if err != nil {
@@ -29,6 +29,7 @@ func RandomString(n int) (string, error) {
 	}
 	return string(b), nil
 }
+
 func MustUUIDv7() string {
 	vid, err := uuid.NewV7()
 	if err != nil {

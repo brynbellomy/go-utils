@@ -1,4 +1,4 @@
-package utils
+package btime
 
 import (
 	"context"
@@ -25,13 +25,9 @@ func ExponentialBackoff(
 			return nil
 		}
 
-		// Calculate delay with jitter
 		exp := math.Pow(2, float64(i))
 		jitter := time.Duration(rand.Int63n(int64(baseDelay)))
-		delay := time.Duration(exp) * baseDelay
-		if delay > maxDelay {
-			delay = maxDelay
-		}
+		delay := min(time.Duration(exp)*baseDelay, maxDelay)
 		delay += jitter
 
 		select {

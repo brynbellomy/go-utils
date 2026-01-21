@@ -1,4 +1,4 @@
-package utils
+package bstruct
 
 import (
 	"encoding/json"
@@ -16,7 +16,7 @@ const UnionTag = "union"
 func UnmarshalUnion(data []byte, v any) error {
 	// Get the reflect.Value of the interface
 	rv := reflect.ValueOf(v)
-	if rv.Kind() != reflect.Ptr || rv.IsNil() {
+	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return fmt.Errorf("v must be a non-nil pointer")
 	}
 	rv = rv.Elem()
@@ -52,18 +52,18 @@ func UnmarshalUnion(data []byte, v any) error {
 	var matchingField reflect.Value
 	var defaultField reflect.Value
 	discriminatorStr := fmt.Sprint(discriminatorValue)
-	
+
 	for i := 0; i < rv.NumField(); i++ {
 		field := rv.Type().Field(i)
 		unionTag := field.Tag.Get(UnionTag)
 		if unionTag == "" || unionTag == "@discriminator" {
 			continue
 		}
-		
+
 		// Parse comma-separated union tags
 		tags := strings.Split(unionTag, ",")
 		matchesDiscriminator := false
-		
+
 		for _, tag := range tags {
 			tag = strings.TrimSpace(tag)
 			if tag == "@default" {
@@ -73,13 +73,13 @@ func UnmarshalUnion(data []byte, v any) error {
 				matchesDiscriminator = true
 			}
 		}
-		
+
 		if matchesDiscriminator {
 			matchingField = rv.Field(i)
 			break
 		}
 	}
-	
+
 	// If no exact match found, try to use default field
 	if !matchingField.IsValid() {
 		if discriminatorValue == nil && defaultField.IsValid() {

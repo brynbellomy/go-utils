@@ -1,25 +1,25 @@
-package utils
+package bcoll
 
 import (
 	"fmt"
 	"strings"
 )
 
-// OrderedSet represents a set that maintains insertion order
-type OrderedSet[T comparable] struct {
+// InsertionOrderedSet represents a set that maintains insertion order
+type InsertionOrderedSet[T comparable] struct {
 	elements []T
 	set      map[T]struct{}
 }
 
-func NewOrderedSet[T comparable]() *OrderedSet[T] {
-	return &OrderedSet[T]{
+func NewInsertionOrderedSet[T comparable]() *InsertionOrderedSet[T] {
+	return &InsertionOrderedSet[T]{
 		elements: []T{},
 		set:      make(map[T]struct{}),
 	}
 }
 
 // Add adds an element to the set if it doesn't already exist
-func (s *OrderedSet[T]) Add(element T) {
+func (s *InsertionOrderedSet[T]) Add(element T) {
 	if _, exists := s.set[element]; !exists {
 		s.elements = append(s.elements, element)
 		s.set[element] = struct{}{}
@@ -27,7 +27,7 @@ func (s *OrderedSet[T]) Add(element T) {
 }
 
 // Remove removes an element from the set
-func (s *OrderedSet[T]) Remove(element T) {
+func (s *InsertionOrderedSet[T]) Remove(element T) {
 	if _, exists := s.set[element]; exists {
 		delete(s.set, element)
 		for i, v := range s.elements {
@@ -40,29 +40,29 @@ func (s *OrderedSet[T]) Remove(element T) {
 }
 
 // Contains checks if an element exists in the set
-func (s *OrderedSet[T]) Contains(element T) bool {
+func (s *InsertionOrderedSet[T]) Contains(element T) bool {
 	_, exists := s.set[element]
 	return exists
 }
 
 // Size returns the number of elements in the set
-func (s *OrderedSet[T]) Size() int {
+func (s *InsertionOrderedSet[T]) Size() int {
 	return len(s.elements)
 }
 
 // Clear removes all elements from the set
-func (s *OrderedSet[T]) Clear() {
+func (s *InsertionOrderedSet[T]) Clear() {
 	s.elements = []T{}
 	s.set = make(map[T]struct{})
 }
 
 // Elements returns a slice of all elements in the set, in order
-func (s *OrderedSet[T]) Elements() []T {
+func (s *InsertionOrderedSet[T]) Elements() []T {
 	return append([]T{}, s.elements...)
 }
 
 // String returns a string representation of the set
-func (s *OrderedSet[T]) String() string {
+func (s *InsertionOrderedSet[T]) String() string {
 	var sb strings.Builder
 	sb.WriteString("[")
 	for i, element := range s.elements {
@@ -75,9 +75,9 @@ func (s *OrderedSet[T]) String() string {
 	return sb.String()
 }
 
-// Union returns a new OrderedSet containing all elements from both sets
-func (s *OrderedSet[T]) Union(other *OrderedSet[T]) *OrderedSet[T] {
-	result := NewOrderedSet[T]()
+// Union returns a new InsertionOrderedSet containing all elements from both sets
+func (s *InsertionOrderedSet[T]) Union(other *InsertionOrderedSet[T]) *InsertionOrderedSet[T] {
+	result := NewInsertionOrderedSet[T]()
 	for _, element := range s.elements {
 		result.Add(element)
 	}
@@ -87,9 +87,9 @@ func (s *OrderedSet[T]) Union(other *OrderedSet[T]) *OrderedSet[T] {
 	return result
 }
 
-// Intersection returns a new OrderedSet containing elements common to both sets
-func (s *OrderedSet[T]) Intersection(other *OrderedSet[T]) *OrderedSet[T] {
-	result := NewOrderedSet[T]()
+// Intersection returns a new InsertionOrderedSet containing elements common to both sets
+func (s *InsertionOrderedSet[T]) Intersection(other *InsertionOrderedSet[T]) *InsertionOrderedSet[T] {
+	result := NewInsertionOrderedSet[T]()
 	for _, element := range s.elements {
 		if other.Contains(element) {
 			result.Add(element)
@@ -98,9 +98,9 @@ func (s *OrderedSet[T]) Intersection(other *OrderedSet[T]) *OrderedSet[T] {
 	return result
 }
 
-// Difference returns a new OrderedSet containing elements in s that are not in other
-func (s *OrderedSet[T]) Difference(other *OrderedSet[T]) *OrderedSet[T] {
-	result := NewOrderedSet[T]()
+// Difference returns a new InsertionOrderedSet containing elements in s that are not in other
+func (s *InsertionOrderedSet[T]) Difference(other *InsertionOrderedSet[T]) *InsertionOrderedSet[T] {
+	result := NewInsertionOrderedSet[T]()
 	for _, element := range s.elements {
 		if !other.Contains(element) {
 			result.Add(element)

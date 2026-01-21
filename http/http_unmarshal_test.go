@@ -1,4 +1,4 @@
-package utils_test
+package bhttp_test
 
 import (
 	"net/http"
@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/brynbellomy/go-utils"
+	bhttp "github.com/brynbellomy/go-utils/http"
 	"github.com/brynbellomy/go-utils/fn"
 )
 
@@ -91,7 +91,7 @@ func TestUnmarshalHTTPField(t *testing.T) {
 	require.NoError(t, err)
 	r.Header.Set("Content-Type", "application/json")
 
-	err = utils.UnmarshalHTTPRequest(&req, r)
+	err = bhttp.UnmarshalHTTPRequest(&req, r)
 	require.NoError(t, err)
 
 	require.Equal(t, "application/json", req.ContentType)
@@ -120,7 +120,7 @@ func TestUnmarshalURLQuery_PointerReceiver(t *testing.T) {
 	require.NoError(t, err)
 
 	var req request
-	err = utils.UnmarshalHTTPRequest(&req, r)
+	err = bhttp.UnmarshalHTTPRequest(&req, r)
 	require.NoError(t, err)
 
 	t.Logf("UnmarshalCalled: %v, Value: %s", req.CustomType.UnmarshalCalled, req.CustomType.Value)
@@ -137,7 +137,7 @@ func TestUnmarshalURLQuery_ValueReceiver(t *testing.T) {
 	require.NoError(t, err)
 
 	var req request
-	err = utils.UnmarshalHTTPRequest(&req, r)
+	err = bhttp.UnmarshalHTTPRequest(&req, r)
 	require.NoError(t, err)
 
 	t.Logf("UnmarshalCalled: %v, Value: %s", req.CustomType.UnmarshalCalled, req.CustomType.Value)

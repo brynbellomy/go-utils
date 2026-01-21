@@ -1,4 +1,4 @@
-package utils
+package bsync
 
 import (
 	"context"
@@ -7,12 +7,13 @@ import (
 )
 
 // ContextFromChan creates a context that finishes when the provided channel
-// receives or is closed.
-func ContextFromChan(chStop <-chan struct{}) (context.Context, context.CancelFunc) {
+// receives or is closed. The caller must ensure either chCancel is eventually
+// closed or the returned cancel function is called to prevent goroutine leaks.
+func ContextFromChan(chCancel <-chan struct{}) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		select {
-		case <-chStop:
+		case <-chCancel:
 			cancel()
 		case <-ctx.Done():
 		}
@@ -41,14 +42,14 @@ func (ch ChanContext) Err() error {
 	}
 }
 
-func (ch ChanContext) Value(key interface{}) interface{} {
+func (ch ChanContext) Value(key any) any {
 	return nil
 }
 
 // CombinedContext creates a context that finishes when any of the provided
 // signals finish.  A signal can be a `context.Context`, a `chan struct{}`, or
 // a `time.Duration` (which is transformed into a `context.WithTimeout`).
-func CombinedContext(signals ...interface{}) (context.Context, context.CancelFunc) {
+func CombinedContext(signals ...any) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	if len(signals) == 0 {
 		return ctx, cancel
@@ -56,6 +57,7 @@ func CombinedContext(signals ...interface{}) (context.Context, context.CancelFun
 	signals = append(signals, ctx)
 
 	var cases []reflect.SelectCase
+	var otherCancels []context.CancelFunc
 	for _, signal := range signals {
 		var ch reflect.Value
 
@@ -67,18 +69,20 @@ func CombinedContext(signals ...interface{}) (context.Context, context.CancelFun
 		case chan struct{}:
 			ch = reflect.ValueOf(sig)
 		case time.Duration:
-			var ctxTimeout context.Context
-			ctxTimeout, _ = context.WithTimeout(ctx, sig)
+			ctxTimeout, cancelTimeout := context.WithTimeout(ctx, sig)
 			ch = reflect.ValueOf(ctxTimeout.Done())
+			otherCancels = append(otherCancels, cancelTimeout)
 		default:
-			continue
+			panic("invariant violation")
 		}
 		cases = append(cases, reflect.SelectCase{Chan: ch, Dir: reflect.SelectRecv})
 	}
-	cases = append(cases, reflect.SelectCase{Chan: reflect.ValueOf(ctx.Done()), Dir: reflect.SelectRecv})
 
 	go func() {
 		defer cancel()
+		for _, c := range otherCancels {
+			defer c()
+		}
 		_, _, _ = reflect.Select(cases)
 	}()
 

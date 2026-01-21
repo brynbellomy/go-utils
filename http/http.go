@@ -1,4 +1,4 @@
-package utils
+package bhttp
 
 import (
 	"bytes"
@@ -17,11 +17,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brynbellomy/go-utils/coll"
 	"github.com/rs/cors"
 )
 
 // dnsCache is a thread-safe map that stores hostname to IP address mappings for DNS caching.
-var dnsCache = NewSyncMap[string, string]()
+var dnsCache = bcoll.NewSyncMap[string, string]()
 
 // ApplyCachedDNS resolves the hostname in the given URL using a cached DNS lookup and returns
 // a modified URL with the IP address substituted for the hostname. It also returns a cleanup
@@ -254,10 +255,10 @@ func RespondJSON(resp http.ResponseWriter, data any) {
 	}
 }
 
-// UnrestrictedCors wraps an HTTP handler with permissive CORS middleware that allows
+// UnrestrictedCORS wraps an HTTP handler with permissive CORS middleware that allows
 // all origins, methods, headers, and credentials. This should only be used in development
 // or when the API is intentionally public.
-func UnrestrictedCors(handler http.Handler) http.Handler {
+func UnrestrictedCORS(handler http.Handler) http.Handler {
 	return cors.New(cors.Options{
 		AllowOriginFunc:  func(string) bool { return true },
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "PATCH", "AUTHORIZE", "SUBSCRIBE", "ACK", "OPTIONS", "HEAD"},

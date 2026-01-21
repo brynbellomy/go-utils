@@ -1,13 +1,13 @@
-package utils
+package bcoll
 
 import (
 	"reflect"
 	"testing"
 )
 
-func TestSortedMapInsertAndGet(t *testing.T) {
-	// Create a new SortedMap with string values
-	sm := NewSortedMap[int, string]()
+func TestKeySortedMapInsertAndGet(t *testing.T) {
+	// Create a new KeySortedMap with string values
+	sm := NewKeySortedMap[int, string]()
 
 	// Insert key-value pairs
 	sm.Insert(3, "three")
@@ -41,9 +41,9 @@ func TestSortedMapInsertAndGet(t *testing.T) {
 	}
 }
 
-func TestSortedMapIterator(t *testing.T) {
-	// Create a new SortedMap with string values
-	sm := NewSortedMap[int, string]()
+func TestKeySortedMapIterator(t *testing.T) {
+	// Create a new KeySortedMap with string values
+	sm := NewKeySortedMap[int, string]()
 
 	// Step 1: Test iteration on an empty map
 	var gotKeys []int

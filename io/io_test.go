@@ -1,4 +1,4 @@
-package utils_test
+package bio_test
 
 import (
 	"io"
@@ -9,14 +9,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/brynbellomy/go-utils"
+	bio "github.com/brynbellomy/go-utils/io"
 )
 
 func TestBufferedReadSeeker(t *testing.T) {
 	t.Run("Seek() moves to correct offset and works between reads", func(t *testing.T) {
 		data := "abcdefghijklmnopqrstuvwxyz"
 		reader := strings.NewReader(data)
-		brs := utils.NewBufferedReadSeeker(reader)
+		brs := bio.NewBufferedReadSeeker(reader)
 
 		buf := make([]byte, 5)
 		n, err := brs.Read(buf)
@@ -46,7 +46,7 @@ func TestBufferedReadSeeker(t *testing.T) {
 	t.Run("Read() begins from correct offset after Seek()", func(t *testing.T) {
 		data := "abcdefghijklmnopqrstuvwxyz"
 		reader := strings.NewReader(data)
-		brs := utils.NewBufferedReadSeeker(reader)
+		brs := bio.NewBufferedReadSeeker(reader)
 
 		offset, err := brs.Seek(5, io.SeekStart)
 		require.NoError(t, err)
@@ -61,7 +61,7 @@ func TestBufferedReadSeeker(t *testing.T) {
 
 	t.Run("Seek() blocks and unblocks when data is available", func(t *testing.T) {
 		r, w := io.Pipe()
-		brs := utils.NewBufferedReadSeeker(r)
+		brs := bio.NewBufferedReadSeeker(r)
 
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -91,7 +91,7 @@ func TestBufferedReadSeeker(t *testing.T) {
 
 	t.Run("Seek() returns io.ErrUnexpectedEOF if not enough data was available", func(t *testing.T) {
 		r, w := io.Pipe()
-		brs := utils.NewBufferedReadSeeker(r)
+		brs := bio.NewBufferedReadSeeker(r)
 
 		var wg sync.WaitGroup
 		wg.Add(1)

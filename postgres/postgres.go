@@ -1,4 +1,4 @@
-package utils
+package bpostgres
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/brynbellomy/go-utils/sync"
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
 )
@@ -33,7 +34,7 @@ type PostgresNotificationListener struct {
 	listener    *pq.Listener
 	minReconn   time.Duration
 	maxReconn   time.Duration
-	mbNotifs    *Mailbox[string]
+	mbNotifs    *bsync.Mailbox[string]
 	chStop      chan struct{}
 	wgDone      sync.WaitGroup
 	closeOnce   sync.Once
@@ -41,7 +42,7 @@ type PostgresNotificationListener struct {
 
 func NewPostgresNotificationListener(postgresURI string, minReconn time.Duration, maxReconn time.Duration) *PostgresNotificationListener {
 	return &PostgresNotificationListener{
-		mbNotifs:    NewMailbox[string](1000),
+		mbNotifs:    bsync.NewMailbox[string](1000),
 		postgresURI: postgresURI,
 		minReconn:   minReconn,
 		maxReconn:   maxReconn,
@@ -121,7 +122,7 @@ type PostgresQueue[T any] struct {
 	notificationQuery   string
 	catchupQuery        string
 
-	mbQueue   *Mailbox[T]
+	mbQueue   *bsync.Mailbox[T]
 	chStop    chan struct{}
 	wgDone    sync.WaitGroup
 	closeOnce sync.Once
@@ -136,7 +137,7 @@ func NewPostgresQueue[T any](postgresURI string, db *sqlx.DB, notificationChanne
 		notificationQuery:   notificationQuery,
 		catchupQuery:        catchupQuery,
 		chStop:              make(chan struct{}),
-		mbQueue:             NewMailbox[T](1000),
+		mbQueue:             bsync.NewMailbox[T](1000),
 	}
 }
 
