@@ -27,14 +27,14 @@ const (
 type StatusCode int
 
 var (
-	ErrBadRequest          = WithNew("bad request").Set(StatusCode(http.StatusBadRequest))
-	ErrUnauthorized        = WithNew("unauthorized").Set(StatusCode(http.StatusUnauthorized))
-	ErrForbidden           = WithNew("forbidden").Set(StatusCode(http.StatusForbidden))
-	ErrNotFound            = WithNew("not found").Set(StatusCode(http.StatusNotFound))
-	ErrTooManyRequests     = WithNew("too many requests").Set(StatusCode(http.StatusTooManyRequests))
-	ErrInternalServerError = WithNew("internal server error").Set(StatusCode(http.StatusInternalServerError))
-	ErrUnimplemented       = WithNew("not implemented").Set(StatusCode(http.StatusNotImplemented))
-	ErrServiceUnavailable  = WithNew("service unavailable").Set(StatusCode(http.StatusServiceUnavailable))
+	ErrBadRequest          = WithNew("bad request").Set(StatusCode(http.StatusBadRequest), FaultCaller)
+	ErrUnauthorized        = WithNew("unauthorized").Set(StatusCode(http.StatusUnauthorized), FaultCaller)
+	ErrForbidden           = WithNew("forbidden").Set(StatusCode(http.StatusForbidden), FaultCaller)
+	ErrNotFound            = WithNew("not found").Set(StatusCode(http.StatusNotFound), FaultCaller)
+	ErrTooManyRequests     = WithNew("too many requests").Set(StatusCode(http.StatusTooManyRequests), FaultCaller)
+	ErrUnimplemented       = WithNew("not implemented").Set(StatusCode(http.StatusNotImplemented), FaultCaller)
+	ErrInternalServerError = WithNew("internal server error").Set(StatusCode(http.StatusInternalServerError), FaultInternal)
+	ErrServiceUnavailable  = WithNew("service unavailable").Set(StatusCode(http.StatusServiceUnavailable), FaultInternal)
 )
 
 // Fields represents structured key-value pairs for logging. Fields are formatted

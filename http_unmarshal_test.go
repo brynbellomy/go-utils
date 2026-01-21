@@ -22,6 +22,34 @@ func (t *TestUnmarshaler) UnmarshalText(text []byte) error {
 
 type Alias int
 
+// CustomQueryType tests URLQueryUnmarshaler interface with pointer receiver
+type CustomQueryType struct {
+	Value           string
+	UnmarshalCalled bool
+}
+
+func (c *CustomQueryType) UnmarshalURLQuery(values []string) error {
+	c.UnmarshalCalled = true
+	if len(values) > 0 {
+		c.Value = values[0]
+	}
+	return nil
+}
+
+// CustomQueryTypeValue tests URLQueryUnmarshaler interface with pointer receiver (second test)
+type CustomQueryTypeValue struct {
+	Value           string
+	UnmarshalCalled bool
+}
+
+func (c *CustomQueryTypeValue) UnmarshalURLQuery(values []string) error {
+	c.UnmarshalCalled = true
+	if len(values) > 0 {
+		c.Value = values[0]
+	}
+	return nil
+}
+
 func TestUnmarshalHTTPField(t *testing.T) {
 	type request struct {
 		ContentType      string   `header:"Content-Type"`
@@ -81,4 +109,38 @@ func TestUnmarshalHTTPField(t *testing.T) {
 	require.NotNil(t, req.QueryPtrAlias)
 	require.Equal(t, Alias(999), *req.QueryPtrAlias)
 	require.Equal(t, []Alias{111, 222, 333}, req.QueryAliasArray)
+}
+
+func TestUnmarshalURLQuery_PointerReceiver(t *testing.T) {
+	type request struct {
+		CustomType CustomQueryType `query:"custom"`
+	}
+
+	r, err := http.NewRequest("GET", "http://localhost?custom=test_value", nil)
+	require.NoError(t, err)
+
+	var req request
+	err = utils.UnmarshalHTTPRequest(&req, r)
+	require.NoError(t, err)
+
+	t.Logf("UnmarshalCalled: %v, Value: %s", req.CustomType.UnmarshalCalled, req.CustomType.Value)
+	require.True(t, req.CustomType.UnmarshalCalled, "UnmarshalURLQuery should have been called")
+	require.Equal(t, "test_value", req.CustomType.Value)
+}
+
+func TestUnmarshalURLQuery_ValueReceiver(t *testing.T) {
+	type request struct {
+		CustomType CustomQueryTypeValue `query:"custom"`
+	}
+
+	r, err := http.NewRequest("GET", "http://localhost?custom=test_value", nil)
+	require.NoError(t, err)
+
+	var req request
+	err = utils.UnmarshalHTTPRequest(&req, r)
+	require.NoError(t, err)
+
+	t.Logf("UnmarshalCalled: %v, Value: %s", req.CustomType.UnmarshalCalled, req.CustomType.Value)
+	require.True(t, req.CustomType.UnmarshalCalled, "UnmarshalURLQuery should have been called")
+	require.Equal(t, "test_value", req.CustomType.Value)
 }

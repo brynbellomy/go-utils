@@ -4,11 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding"
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"mime"
 	"mime/multipart"
 	"net"
@@ -16,18 +14,18 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"reflect"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/rs/cors"
-
-	"github.com/brynbellomy/go-utils/errors"
 )
 
+// dnsCache is a thread-safe map that stores hostname to IP address mappings for DNS caching.
 var dnsCache = NewSyncMap[string, string]()
 
+// ApplyCachedDNS resolves the hostname in the given URL using a cached DNS lookup and returns
+// a modified URL with the IP address substituted for the hostname. It also returns a cleanup
+// function that removes the cached entry for the hostname.
 func ApplyCachedDNS(urlStr string) (string, func(), error) {
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
@@ -54,6 +52,10 @@ func ApplyCachedDNS(urlStr string) (string, func(), error) {
 	return resolvedURL.String(), func() { dnsCache.Delete(hostname) }, nil
 }
 
+// JSONRequest performs an HTTP request with JSON encoding/decoding. It marshals the body
+// parameter to JSON, sends the request with appropriate Content-Type and Accept headers,
+// and unmarshals the response into the response parameter. It returns the response headers,
+// status code, and any error encountered.
 func JSONRequest(ctx context.Context, method string, url string, body any, headers http.Header, response any) (http.Header, int, error) {
 	if headers == nil {
 		headers = http.Header{}
@@ -84,8 +86,13 @@ func JSONRequest(ctx context.Context, method string, url string, body any, heade
 	return resp.Header, resp.StatusCode, nil
 }
 
+// LogHTTPRequests controls whether HTTP requests and responses are logged to stdout.
+// When set to true, request dumps and response status codes will be printed.
 var LogHTTPRequests bool
 
+// HTTPRequest performs an HTTP request with the given method, URL, body, and headers.
+// It uses cached DNS resolution and will clear the DNS cache for the hostname if a URL error occurs.
+// If LogHTTPRequests is true, it will log the request and response details to stdout.
 func HTTPRequest(ctx context.Context, method string, urlStr string, body io.Reader, headers http.Header) (*http.Response, error) {
 	urlWithCachedDNS, clearDNSForHostname, err := ApplyCachedDNS(urlStr)
 	if err != nil {
@@ -125,11 +132,17 @@ func HTTPRequest(ctx context.Context, method string, urlStr string, body io.Read
 	return resp, nil
 }
 
+// HTTPClient extends http.Client with automatic idle connection reaping capabilities.
+// It includes a stop channel for graceful shutdown of the connection reaping goroutine.
 type HTTPClient struct {
 	http.Client
 	chStop chan struct{}
 }
 
+// MakeHTTPClient creates a new HTTPClient with the specified configuration. The requestTimeout
+// sets the maximum duration for requests. If reapIdleConnsInterval is greater than 0, a goroutine
+// will periodically close idle connections at the specified interval. The client uses TLS 1.3 only
+// and accepts the provided TLS certificates for client authentication.
 func MakeHTTPClient(requestTimeout, reapIdleConnsInterval time.Duration, cookieJar http.CookieJar, tlsCerts []tls.Certificate) *HTTPClient {
 	c := http.Client{
 		Timeout: requestTimeout,
@@ -168,314 +181,25 @@ func MakeHTTPClient(requestTimeout, reapIdleConnsInterval time.Duration, cookieJ
 	return &HTTPClient{c, chStop}
 }
 
+// Close stops the idle connection reaping goroutine by closing the stop channel.
 func (c HTTPClient) Close() {
 	close(c.chStop)
 }
 
-var unmarshalRequestRegexp = regexp.MustCompile(`(header|query|path):"([^"]*)"`)
-var stringType = reflect.TypeOf("")
-
-func UnmarshalHTTPRequest(into any, r *http.Request) error {
-	rval := reflect.ValueOf(into).Elem()
-
-	for i := 0; i < rval.Type().NumField(); i++ {
-		field := rval.Type().Field(i)
-		matches := unmarshalRequestRegexp.FindAllStringSubmatch(string(field.Tag), -1)
-		var found bool
-		for _, match := range matches {
-			source := match[1]
-			var name string
-			if len(match) > 2 {
-				name = match[2]
-			}
-
-			fieldVal := rval.Field(i)
-			if !fieldVal.CanAddr() {
-				return errors.Errorf("cannot unmarshal into unaddressable struct field '%v'", field.Name)
-			}
-			fieldVal = fieldVal.Addr()
-
-			var value string
-			var values []string
-			var unmarshal func(fieldName, value string, values []string, fieldVal reflect.Value) error
-			switch source {
-			case "method":
-				value = r.Method
-				unmarshal = unmarshalHTTPMethod
-			case "header":
-				value = r.Header.Get(name)
-				unmarshal = unmarshalHTTPHeader
-			case "query":
-				if r.URL.Query().Has(name) {
-					if fieldVal.Elem().Kind() == reflect.Slice {
-						values = r.URL.Query()[name]
-						unmarshal = unmarshalURLQuery
-					} else {
-						value = r.URL.Query().Get(name)
-						unmarshal = unmarshalURLQuery
-					}
-				}
-			case "path":
-				// if name == "" {
-				value = r.URL.Path
-				// }
-				// else {
-				//     idx, err := strconv.Atoi(name)
-				//     if err != nil {
-				//         return err
-				//     }
-				//     parts := strings.Split(r.URL.Path, "/")
-				//     if idx >= len(parts) {
-				//         panic("invariant violation")
-				//     }
-				// }
-				unmarshal = unmarshalURLPath
-			case "body":
-				bs, err := ioutil.ReadAll(r.Body)
-				if err != nil {
-					return err
-				}
-				value = string(bs)
-				unmarshal = unmarshalBody
-			default:
-				panic("invariant violation")
-			}
-			if value == "" && values == nil {
-				continue
-			}
-
-			err := unmarshal(name, value, values, fieldVal)
-			if err != nil {
-				return err
-			}
-			found = true
-			break
-		}
-		if !found {
-			if field.Tag.Get("required") == "true" {
-				return errors.Errorf("missing request field '%v'", field.Name)
-			}
-		}
-	}
-	return nil
-}
-
-func unmarshalBody(fieldName, value string, values []string, fieldVal reflect.Value) error {
-	return json.Unmarshal([]byte(value), fieldVal.Interface())
-}
-
-var unmarshalResponseRegexp = regexp.MustCompile(`(header):"([^"]*)"`)
-
-func UnmarshalHTTPResponse(into any, r *http.Response) error {
-	rval := reflect.ValueOf(into).Elem()
-
-	for i := 0; i < rval.Type().NumField(); i++ {
-		field := rval.Type().Field(i)
-		matches := unmarshalRequestRegexp.FindAllStringSubmatch(string(field.Tag), -1)
-		var found bool
-		for _, match := range matches {
-			source := match[1]
-			name := match[2]
-
-			fieldVal := rval.Field(i)
-			if fieldVal.Kind() == reflect.Ptr {
-				// no-op
-			} else if fieldVal.CanAddr() {
-				fieldVal = fieldVal.Addr()
-			} else {
-				return errors.Errorf("cannot unmarshal into unaddressable struct field '%v'", field.Name)
-			}
-
-			var value string
-			var unmarshal func(fieldName, value string, values []string, fieldVal reflect.Value) error
-			switch source {
-			case "header":
-				value = r.Header.Get(name)
-				unmarshal = unmarshalHTTPHeader
-			default:
-				panic("invariant violation")
-			}
-			if value == "" {
-				continue
-			}
-
-			err := unmarshal(name, value, nil, fieldVal)
-			if err != nil {
-				return err
-			}
-			found = true
-			break
-		}
-		if !found {
-			if field.Tag.Get("required") != "" {
-				return errors.Errorf("missing request field '%v'", field.Name)
-			}
-		}
-	}
-	return nil
-}
-
-func unmarshalHTTPMethod(fieldName, method string, _ []string, fieldVal reflect.Value) error {
-	return unmarshalHTTPField(fieldName, method, nil, fieldVal)
-}
-
-type URLPathUnmarshaler interface {
-	UnmarshalURLPath(path string) error
-}
-
-func unmarshalURLPath(fieldName, path string, _ []string, fieldVal reflect.Value) error {
-	val := fieldVal.Interface()
-	if as, is := val.(URLPathUnmarshaler); is {
-		return as.UnmarshalURLPath(path)
-	}
-	return unmarshalHTTPField(fieldName, path, nil, fieldVal)
-}
-
-type URLQueryUnmarshaler interface {
-	UnmarshalURLQuery(values []string) error
-}
-
-func unmarshalURLQuery(fieldName, value string, values []string, fieldVal reflect.Value) error {
-	val := fieldVal.Interface()
-	if as, is := val.(URLQueryUnmarshaler); is {
-		return as.UnmarshalURLQuery(values)
-	}
-	return unmarshalHTTPField(fieldName, value, values, fieldVal)
-}
-
-type HTTPHeaderUnmarshaler interface {
-	UnmarshalHTTPHeader(header string) error
-}
-
-func unmarshalHTTPHeader(fieldName, header string, _ []string, fieldVal reflect.Value) error {
-	val := fieldVal.Interface()
-	if as, is := val.(HTTPHeaderUnmarshaler); is {
-		return as.UnmarshalHTTPHeader(header)
-	}
-	return unmarshalHTTPField(fieldName, header, nil, fieldVal)
-}
-
-func unmarshalHTTPField(fieldName, value string, values []string, fieldVal reflect.Value) error {
-	if as, is := fieldVal.Interface().(encoding.TextUnmarshaler); is {
-		return as.UnmarshalText([]byte(value))
-	}
-
-	// Handle string wrapper types
-	rval := reflect.ValueOf(value)
-	if rval.Type().ConvertibleTo(fieldVal.Type().Elem()) {
-		fieldVal.Elem().Set(rval.Convert(fieldVal.Type().Elem()))
-		return nil
-	}
-
-	switch fieldVal.Type().Elem().Kind() {
-	case reflect.Ptr:
-		v := reflect.New(fieldVal.Type().Elem().Elem())
-		err := unmarshalHTTPField(fieldName, value, values, v)
-		if err != nil {
-			return err
-		}
-		fieldVal.Elem().Set(v)
-		return nil
-
-	case reflect.Slice:
-		slice := reflect.MakeSlice(fieldVal.Type().Elem(), 0, len(values))
-		sliceElemType := fieldVal.Type().Elem().Elem()
-
-		for i, v := range values {
-			elem := reflect.New(sliceElemType)
-			err := unmarshalHTTPField(fieldName+fmt.Sprintf("[%v]", i), v, nil, elem)
-			if err != nil {
-				return err
-			}
-			slice = reflect.Append(slice, elem.Elem())
-		}
-		fieldVal.Elem().Set(slice)
-		return nil
-
-	case reflect.Int:
-		n, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			return err
-		}
-		fieldVal.Elem().Set(reflect.ValueOf(int(n)).Convert(fieldVal.Type().Elem()))
-	case reflect.Int8:
-		n, err := strconv.ParseInt(value, 10, 8)
-		if err != nil {
-			return err
-		}
-		fieldVal.Elem().Set(reflect.ValueOf(int8(n)).Convert(fieldVal.Type().Elem()))
-	case reflect.Int16:
-		n, err := strconv.ParseInt(value, 10, 16)
-		if err != nil {
-			return err
-		}
-		fieldVal.Elem().Set(reflect.ValueOf(int16(n)).Convert(fieldVal.Type().Elem()))
-	case reflect.Int32:
-		n, err := strconv.ParseInt(value, 10, 32)
-		if err != nil {
-			return err
-		}
-		fieldVal.Elem().Set(reflect.ValueOf(int32(n)).Convert(fieldVal.Type().Elem()))
-	case reflect.Int64:
-		n, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			return err
-		}
-		fieldVal.Elem().Set(reflect.ValueOf(int64(n)).Convert(fieldVal.Type().Elem()))
-
-	case reflect.Uint:
-		n, err := strconv.ParseUint(value, 10, 64)
-		if err != nil {
-			return err
-		}
-		fieldVal.Elem().Set(reflect.ValueOf(uint(n)).Convert(fieldVal.Type().Elem()))
-	case reflect.Uint8:
-		n, err := strconv.ParseUint(value, 10, 8)
-		if err != nil {
-			return err
-		}
-		fieldVal.Elem().Set(reflect.ValueOf(uint8(n)).Convert(fieldVal.Type().Elem()))
-	case reflect.Uint16:
-		n, err := strconv.ParseUint(value, 10, 16)
-		if err != nil {
-			return err
-		}
-		fieldVal.Elem().Set(reflect.ValueOf(uint16(n)).Convert(fieldVal.Type().Elem()))
-	case reflect.Uint32:
-		n, err := strconv.ParseUint(value, 10, 32)
-		if err != nil {
-			return err
-		}
-		fieldVal.Elem().Set(reflect.ValueOf(uint32(n)).Convert(fieldVal.Type().Elem()))
-	case reflect.Uint64:
-		n, err := strconv.ParseUint(value, 10, 64)
-		if err != nil {
-			return err
-		}
-		fieldVal.Elem().Set(reflect.ValueOf(uint64(n)).Convert(fieldVal.Type().Elem()))
-
-	case reflect.Bool:
-		b, err := strconv.ParseBool(value)
-		if err != nil {
-			return err
-		}
-		fieldVal.Elem().Set(reflect.ValueOf(b).Convert(fieldVal.Type().Elem()))
-
-	default:
-		panic(fmt.Sprintf(`cannot unmarshal http.Request field "%v" into type %v`, fieldName, fieldVal))
-	}
-	return nil
-}
-
+// MultipartPart wraps a multipart.Part and its associated body reader, implementing
+// io.ReadCloser. It ensures both the part and body are properly closed.
 type MultipartPart struct {
 	Part *multipart.Part
 	Body io.ReadCloser
 }
 
+// Read implements io.Reader by delegating to the underlying Part's Read method.
 func (mp *MultipartPart) Read(p []byte) (n int, err error) {
 	return mp.Part.Read(p)
 }
 
+// Close implements io.Closer by closing both the Part and Body, returning the first error
+// encountered if any.
 func (mp *MultipartPart) Close() error {
 	var err1, err2 error
 	if mp.Part != nil {
@@ -490,6 +214,9 @@ func (mp *MultipartPart) Close() error {
 	return err2
 }
 
+// ParseMultipartForm parses a multipart form from the given header and body, invoking the
+// provided callback function for each part. The callback receives the form field name and
+// the part itself. Parsing stops on the first error returned by the callback.
 func ParseMultipartForm(header http.Header, body io.Reader, fn func(field string, part *multipart.Part) error) error {
 	contentTypeHeader := header.Get("Content-Type")
 	_, params, err := mime.ParseMediaType(contentTypeHeader)
@@ -516,7 +243,9 @@ func ParseMultipartForm(header http.Header, body io.Reader, fn func(field string
 	return nil
 }
 
-func RespondJSON(resp http.ResponseWriter, data interface{}) {
+// RespondJSON encodes the given data as JSON and writes it to the response writer with
+// the appropriate Content-Type header. It panics if encoding fails.
+func RespondJSON(resp http.ResponseWriter, data any) {
 	resp.Header().Add("Content-Type", "application/json")
 
 	err := json.NewEncoder(resp).Encode(data)
@@ -525,6 +254,9 @@ func RespondJSON(resp http.ResponseWriter, data interface{}) {
 	}
 }
 
+// UnrestrictedCors wraps an HTTP handler with permissive CORS middleware that allows
+// all origins, methods, headers, and credentials. This should only be used in development
+// or when the API is intentionally public.
 func UnrestrictedCors(handler http.Handler) http.Handler {
 	return cors.New(cors.Options{
 		AllowOriginFunc:  func(string) bool { return true },
