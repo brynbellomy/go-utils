@@ -330,11 +330,51 @@ func unmarshalBodyJSON(fieldName, value string, values []string, fieldVal reflec
 	// fieldVal is already an address (pointer) from the caller
 	// We need to pass the pointer interface to json.Unmarshal
 	ptr := fieldVal.Interface()
+	bodyBytes := []byte(value)
 
-	err := json.Unmarshal([]byte(value), ptr)
+	err := json.Unmarshal(bodyBytes, ptr)
 	if err != nil {
 		return errors.Wrapf(err, "failed to unmarshal JSON body into field '%s'", fieldName)
 	}
+
+	// Fast path: if the JSON body target has no required fields, skip presence validation.
+	targetType := fieldVal.Type().Elem()
+	if targetType.Kind() == reflect.Struct {
+		hasRequiredFields := false
+		for i := 0; i < targetType.NumField(); i++ {
+			if targetType.Field(i).Tag.Get("required") == "true" {
+				hasRequiredFields = true
+				break
+			}
+		}
+		if !hasRequiredFields {
+			return nil
+		}
+
+		// Validate required fields by checking which keys were present in the body.
+		var presentKeys map[string]json.RawMessage
+		if err := json.Unmarshal(bodyBytes, &presentKeys); err != nil {
+			return errors.Wrapf(err, "failed to check required fields in JSON body '%s'", fieldName)
+		}
+
+		for i := 0; i < targetType.NumField(); i++ {
+			sf := targetType.Field(i)
+			if sf.Tag.Get("required") != "true" {
+				continue
+			}
+			jsonKey := sf.Name
+			if tag := sf.Tag.Get("json"); tag != "" {
+				if name, _, _ := strings.Cut(tag, ","); name != "" {
+					jsonKey = name
+				}
+			}
+			raw, exists := presentKeys[jsonKey]
+			if !exists || string(raw) == "null" {
+				return errors.Errorf("missing required JSON body field '%s'", jsonKey)
+			}
+		}
+	}
+
 	return nil
 }
 

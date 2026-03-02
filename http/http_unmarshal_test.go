@@ -144,3 +144,63 @@ func TestUnmarshalURLQuery_ValueReceiver(t *testing.T) {
 	require.True(t, req.CustomType.UnmarshalCalled, "UnmarshalURLQuery should have been called")
 	require.Equal(t, "test_value", req.CustomType.Value)
 }
+
+func TestUnmarshalBodyJSON_NoRequiredFields(t *testing.T) {
+	type payload struct {
+		Name string `json:"name"`
+		Age  int    `json:"age"`
+	}
+	type request struct {
+		Payload payload `body:"json"`
+	}
+
+	r, err := http.NewRequest("POST", "http://localhost", strings.NewReader(`{"name":"alice","age":33}`))
+	require.NoError(t, err)
+
+	var req request
+	err = bhttp.UnmarshalHTTPRequest(&req, r)
+	require.NoError(t, err)
+	require.Equal(t, "alice", req.Payload.Name)
+	require.Equal(t, 33, req.Payload.Age)
+}
+
+func TestUnmarshalBodyJSON_RequiredFields(t *testing.T) {
+	type payload struct {
+		Name string `json:"name" required:"true"`
+		Nick string `json:"nick"`
+	}
+	type request struct {
+		Payload payload `body:"json"`
+	}
+
+	t.Run("missing required field", func(t *testing.T) {
+		r, err := http.NewRequest("POST", "http://localhost", strings.NewReader(`{"nick":"n"}`))
+		require.NoError(t, err)
+
+		var req request
+		err = bhttp.UnmarshalHTTPRequest(&req, r)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "missing required JSON body field 'name'")
+	})
+
+	t.Run("required field is null", func(t *testing.T) {
+		r, err := http.NewRequest("POST", "http://localhost", strings.NewReader(`{"name":null}`))
+		require.NoError(t, err)
+
+		var req request
+		err = bhttp.UnmarshalHTTPRequest(&req, r)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "missing required JSON body field 'name'")
+	})
+
+	t.Run("required field present", func(t *testing.T) {
+		r, err := http.NewRequest("POST", "http://localhost", strings.NewReader(`{"name":"bob","nick":"n"}`))
+		require.NoError(t, err)
+
+		var req request
+		err = bhttp.UnmarshalHTTPRequest(&req, r)
+		require.NoError(t, err)
+		require.Equal(t, "bob", req.Payload.Name)
+		require.Equal(t, "n", req.Payload.Nick)
+	})
+}
