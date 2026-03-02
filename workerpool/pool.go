@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	butils "github.com/brynbellomy/go-utils"
+	"github.com/brynbellomy/go-utils/sync"
 )
 
 type WorkerPool[T any] struct {
@@ -116,7 +116,7 @@ func (wp *WorkerPool[T]) workerLoop() {
 	go func() {
 		defer wp.wgDone.Done()
 
-		ctx, cancel := butils.ContextFromChan(wp.chStop)
+		ctx, cancel := bsync.ContextFromChan(wp.chStop)
 		defer cancel()
 		for {
 			select {
