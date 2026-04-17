@@ -111,6 +111,54 @@ func TestUnmarshalHTTPField(t *testing.T) {
 	require.Equal(t, []Alias{111, 222, 333}, req.QueryAliasArray)
 }
 
+// TestUnmarshalHTTPField_NumericSliceAliases is a regression test for a bug
+// where slices of numeric types that alias `rune` silently produced empty
+// slices. Because `int32 == rune`, Go's reflect package reports `string` as
+// ConvertibleTo `[]int32` and `[]rune`. The earlier "string wrapper"
+// shortcut in unmarshalHTTPField took that path and set the field to an
+// empty slice, skipping the per-element parse that populates the slice from
+// `values`.
+//
+// Note: `[]byte` (== `[]uint8`) is intentionally special-cased elsewhere in
+// the slice handler as "raw bytes of a single value", so it's tested
+// separately in TestUnmarshalHTTPField_ByteSliceQuery.
+func TestUnmarshalHTTPField_NumericSliceAliases(t *testing.T) {
+	type request struct {
+		Int32s  []int32  `query:"i32"`
+		Runes   []rune   `query:"r"`
+		Uint32s []uint32 `query:"u32"`
+		Int64s  []int64  `query:"i64"`
+	}
+	var req request
+	r, err := http.NewRequest("GET",
+		"http://localhost?i32=1&i32=2&r=5&r=6&u32=7&u32=8&i64=9&i64=10", nil)
+	require.NoError(t, err)
+	require.NoError(t, bhttp.UnmarshalHTTPRequest(&req, r))
+
+	require.Equal(t, []int32{1, 2}, req.Int32s)
+	require.Equal(t, []rune{5, 6}, req.Runes)
+	require.Equal(t, []uint32{7, 8}, req.Uint32s)
+	require.Equal(t, []int64{9, 10}, req.Int64s)
+}
+
+// TestUnmarshalHTTPField_ByteSliceQuery verifies that a []byte field tagged
+// as a query parameter receives the raw bytes of the single query value. The
+// slice handler has an intentional special case for []byte that treats it as
+// a byte array rather than a slice of values, and the earlier shortcut was
+// masking that special case — a ?b=hello query ended up as an empty []byte
+// because the shortcut converted the empty `value` string rather than
+// deferring to the slice branch's values[0] path.
+func TestUnmarshalHTTPField_ByteSliceQuery(t *testing.T) {
+	type request struct {
+		Body []byte `query:"b"`
+	}
+	var req request
+	r, err := http.NewRequest("GET", "http://localhost?b=hello%20world", nil)
+	require.NoError(t, err)
+	require.NoError(t, bhttp.UnmarshalHTTPRequest(&req, r))
+	require.Equal(t, []byte("hello world"), req.Body)
+}
+
 func TestUnmarshalURLQuery_PointerReceiver(t *testing.T) {
 	type request struct {
 		CustomType CustomQueryType `query:"custom"`

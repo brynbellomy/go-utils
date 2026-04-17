@@ -462,9 +462,15 @@ func unmarshalHTTPField(fieldName, value string, values []string, fieldVal refle
 		return as.UnmarshalText([]byte(value))
 	}
 
-	// Handle string wrapper types
+	// Handle string wrapper types (e.g. `type Email string`).
+	//
+	// Must gate on Kind == String: `string` is also reflect-convertible to
+	// []byte, []rune, and any slice whose element type aliases byte or rune
+	// (so []int32, []uint8, etc.), but for those the caller expects the slice
+	// to be populated element-by-element from `values`, not converted whole
+	// from the single `value`.
 	rval := reflect.ValueOf(value)
-	if rval.Type().ConvertibleTo(fieldVal.Type().Elem()) {
+	if fieldVal.Type().Elem().Kind() == reflect.String && rval.Type().ConvertibleTo(fieldVal.Type().Elem()) {
 		fieldVal.Elem().Set(rval.Convert(fieldVal.Type().Elem()))
 		return nil
 	}
