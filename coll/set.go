@@ -82,3 +82,11 @@ func (m Set[T]) Difference(other Set[T]) Set[T] {
 	}
 	return result
 }
+
+func (m Set[T]) Slice() []T {
+	out := make([]T, 0, len(m))
+	for item := range m {
+		out = append(out, item)
+	}
+	return out
+}
