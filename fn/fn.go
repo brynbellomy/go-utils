@@ -307,3 +307,15 @@ func GroupBy[T any, U comparable](stuff []T, discriminator func(T) U) [][]T {
 	}
 	return groups
 }
+
+func Dedupe[T comparable](in []T) []T {
+	var out []T
+	seen := make(map[T]struct{})
+	for _, x := range in {
+		if _, ok := seen[x]; !ok {
+			out = append(out, x)
+			seen[x] = struct{}{}
+		}
+	}
+	return out
+}

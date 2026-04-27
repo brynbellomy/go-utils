@@ -54,3 +54,31 @@ func (m Set[T]) Remove(item T) bool {
 func (m Set[T]) Copy() Set[T] {
 	return Set[T](maps.Clone(m))
 }
+
+func (m Set[T]) Intersection(other Set[T]) Set[T] {
+	result := NewSet[T]()
+	for item := range m {
+		if other.Has(item) {
+			result.Add(item)
+		}
+	}
+	return result
+}
+
+func (m Set[T]) Union(other Set[T]) Set[T] {
+	result := m.Copy()
+	for item := range other {
+		result.Add(item)
+	}
+	return result
+}
+
+func (m Set[T]) Difference(other Set[T]) Set[T] {
+	result := NewSet[T]()
+	for item := range m {
+		if !other.Has(item) {
+			result.Add(item)
+		}
+	}
+	return result
+}
