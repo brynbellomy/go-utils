@@ -40,6 +40,26 @@ return errors.WithNew("invalid API key (time: %v)", time.Now()).Set(
 )
 ```
 
+### Nil Handling
+
+`With`, `WithNew`, `WithMetadata`, `WithCause`, `Annotate`, `AddStack`, and metadata traversal helpers treat typed-nil error interfaces as nil. This guards the common Go footgun where an `error` interface can hold a nil concrete pointer while the interface itself is non-nil:
+
+```go
+var typedNil *MyError
+var err error = typedNil
+
+errors.With(err, "context")              // nil *Builder
+errors.WithMetadata(err, "key", "value") // nil error
+```
+
+The fluent builder methods also remain nil-safe:
+
+```go
+return errors.With(err, "context").Set(errors.FaultInternal)
+```
+
+If `err` is nil or typed-nil, the chain returns a nil `*Builder`. Go will still box that nil pointer as a non-nil `error` if it is returned directly from a function with return type `error`; no package implementation can change that while `With` continues to return `*Builder`. Use `.Err()` when the parent error may be nil and the value is being converted directly to `error`.
+
 ### Properties
 
 ```go

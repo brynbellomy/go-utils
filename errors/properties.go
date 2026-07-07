@@ -68,8 +68,9 @@ type withMetadata struct {
 
 // WithMetadata wraps an error with properties and/or fields.
 // Accepts Fault, StatusCode, Retryability, Fields, and individual field values.
+// Returns nil if err is nil or typed-nil.
 func WithMetadata(err error, items ...any) error {
-	if err == nil {
+	if isNilError(err) {
 		return nil
 	}
 
@@ -103,22 +104,33 @@ func WithMetadata(err error, items ...any) error {
 }
 
 func (wm *withMetadata) Error() string {
-	if wm.parent != nil {
+	if wm == nil {
+		return nilErrorString
+	}
+	if !isNilError(wm.parent) {
 		return wm.parent.Error()
 	}
 	return "error with metadata"
 }
 
 func (wm *withMetadata) Unwrap() error {
-	return wm.parent
+	if wm == nil {
+		return nil
+	}
+	return normalizeError(wm.parent)
 }
 
 func (wm *withMetadata) Format(s fmt.State, verb rune) {
+	if wm == nil {
+		io.WriteString(s, nilErrorString)
+		return
+	}
+
 	switch verb {
 	case 'v':
 		if s.Flag('+') {
 			// Verbose format: show parent error with stack if available
-			if wm.parent != nil {
+			if !isNilError(wm.parent) {
 				fmt.Fprintf(s, "%+v", wm.parent)
 			} else {
 				io.WriteString(s, "error with metadata")
@@ -154,7 +166,7 @@ type unwrapper interface {
 // IsRetryable traverses the error chain looking for a Retryable marker.
 // Returns true only if Retryable is explicitly set somewhere in the chain.
 func IsRetryable(err error) bool {
-	for err != nil {
+	for !isNilError(err) {
 		if wm, ok := err.(*withMetadata); ok {
 			if wm.retryability == Retryable {
 				return true
@@ -162,14 +174,14 @@ func IsRetryable(err error) bool {
 			if wm.retryability == NonRetryable {
 				return false
 			}
-			err = wm.parent
+			err = normalizeError(wm.parent)
 		} else {
 			// Try unwrapping via standard Unwrap() method
 			unwrapper, ok := err.(unwrapper)
 			if !ok {
 				break
 			}
-			err = unwrapper.Unwrap()
+			err = normalizeError(unwrapper.Unwrap())
 		}
 	}
 	return false
@@ -179,12 +191,12 @@ func IsRetryable(err error) bool {
 // Outer layers override inner layers when explicitly set.
 // Supports errors.Join by checking multiple unwrapped errors.
 func GetStatusCode(err error) int {
-	for err != nil {
+	for !isNilError(err) {
 		if wm, ok := err.(*withMetadata); ok {
 			if wm.statusCode != 0 {
 				return int(wm.statusCode)
 			}
-			err = wm.parent
+			err = normalizeError(wm.parent)
 		} else {
 			// Try unwrapping via multi-error Unwrap() []error (e.g., errors.Join)
 			if multiUnwrapper, ok := err.(interface{ Unwrap() []error }); ok {
@@ -201,7 +213,7 @@ func GetStatusCode(err error) int {
 			if !ok {
 				break
 			}
-			err = unwrapper.Unwrap()
+			err = normalizeError(unwrapper.Unwrap())
 		}
 	}
 	return 0
@@ -210,19 +222,19 @@ func GetStatusCode(err error) int {
 // GetFault traverses the error chain and returns the first non-unknown fault found.
 // Outer layers override inner layers when explicitly set.
 func GetFault(err error) Fault {
-	for err != nil {
+	for !isNilError(err) {
 		if wm, ok := err.(*withMetadata); ok {
 			if wm.fault != FaultUnknown {
 				return wm.fault
 			}
-			err = wm.parent
+			err = normalizeError(wm.parent)
 		} else {
 			// Try unwrapping via standard Unwrap() method
 			unwrapper, ok := err.(unwrapper)
 			if !ok {
 				break
 			}
-			err = unwrapper.Unwrap()
+			err = normalizeError(unwrapper.Unwrap())
 		}
 	}
 	return FaultUnknown
@@ -232,13 +244,13 @@ func GetFault(err error) Fault {
 // It traverses the error chain and collects fields from all withMetadata wrappers.
 func GetFields(err error) Fields {
 	var fields []any
-	for err != nil {
+	for !isNilError(err) {
 		wm := &withMetadata{}
 		if errors.As(err, &wm) {
 			if len(wm.fields) > 0 {
 				fields = append(fields, wm.fields...)
 			}
-			err = wm.parent
+			err = normalizeError(wm.parent)
 		} else {
 			break
 		}

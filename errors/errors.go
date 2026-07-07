@@ -58,9 +58,14 @@ var (
 //	    // ... do work that might return an error
 //	}
 func Annotate(err *error, msg string, args ...any) {
-	if *err != nil {
-		*err = errors.Wrapf(*err, msg, args...)
+	if err == nil {
+		return
 	}
+	if isNilError(*err) {
+		*err = nil
+		return
+	}
+	*err = errors.Wrapf(*err, msg, args...)
 }
 
 // AddStack adds a stack trace to the error pointed to by err if err is non-nil.
@@ -74,9 +79,14 @@ func Annotate(err *error, msg string, args ...any) {
 //	    // ... do work that might return an error
 //	}
 func AddStack(err *error) {
-	if *err != nil {
-		*err = errors.WithStack(*err)
+	if err == nil {
+		return
 	}
+	if isNilError(*err) {
+		*err = nil
+		return
+	}
+	*err = errors.WithStack(*err)
 }
 
 // OneOf returns true if the root cause of the received error matches any of the provided errors.
@@ -88,6 +98,9 @@ func AddStack(err *error) {
 //	    // handle EOF-related errors
 //	}
 func OneOf(received error, errs ...error) bool {
+	if isNilError(received) {
+		return false
+	}
 	return slices.Contains(errs, Cause(received))
 }
 
@@ -95,6 +108,8 @@ func OneOf(received error, errs ...error) bool {
 // create a new error message but preserve the original error as the cause.
 // The returned error implements the Cause() interface for accessing the root cause,
 // and Unwrap() for Go 1.13+ error chain compatibility.
+// If either side is nil or typed-nil, WithCause returns the non-nil side directly.
+// If both sides are nil or typed-nil, WithCause returns nil.
 //
 // Example usage:
 //
@@ -102,6 +117,14 @@ func OneOf(received error, errs ...error) bool {
 //	    return WithCause(errors.New("invalid request"), err)
 //	}
 func WithCause(err error, cause error) error {
+	err = normalizeError(err)
+	cause = normalizeError(cause)
+	if err == nil {
+		return cause
+	}
+	if cause == nil {
+		return err
+	}
 	return &withCause{err, cause}
 }
 
@@ -110,21 +133,56 @@ type withCause struct {
 	cause error
 }
 
-func (w *withCause) Error() string { return w.error.Error() + ": " + w.cause.Error() }
+func (w *withCause) Error() string {
+	if w == nil {
+		return nilErrorString
+	}
 
-func (w *withCause) Cause() error { return w.cause }
+	err := normalizeError(w.error)
+	cause := normalizeError(w.cause)
+	switch {
+	case err == nil && cause == nil:
+		return nilErrorString
+	case err == nil:
+		return cause.Error()
+	case cause == nil:
+		return err.Error()
+	default:
+		return err.Error() + ": " + cause.Error()
+	}
+}
+
+func (w *withCause) Cause() error {
+	if w == nil {
+		return nil
+	}
+	return normalizeError(w.cause)
+}
 
 // Unwrap provides compatibility for Go 1.13 error chains.
 // Returns the wrapper error to maintain proper chain traversal.
 // Use Cause() for direct access to the root cause.
-func (w *withCause) Unwrap() error { return w.error }
+func (w *withCause) Unwrap() error {
+	if w == nil {
+		return nil
+	}
+	return normalizeError(w.error)
+}
 
 func (w *withCause) Format(s fmt.State, verb rune) {
 	switch verb {
 	case 'v':
 		if s.Flag('+') {
-			fmt.Fprintf(s, "%+v\n", w.Cause())
-			io.WriteString(s, w.error.Error())
+			cause := w.Cause()
+			err := w.Unwrap()
+			if cause != nil {
+				fmt.Fprintf(s, "%+v\n", cause)
+			}
+			if err != nil {
+				io.WriteString(s, err.Error())
+			} else {
+				io.WriteString(s, nilErrorString)
+			}
 			return
 		}
 		fallthrough

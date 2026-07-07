@@ -13,6 +13,18 @@ import (
 	"github.com/brynbellomy/go-utils/errors"
 )
 
+type pointerError struct {
+	msg string
+}
+
+func (e *pointerError) Error() string {
+	return e.msg
+}
+
+func returnNilBuilderAsError() error {
+	return errors.With(nil, "context")
+}
+
 func TestBuilderWithStatusCode(t *testing.T) {
 	var errfields errors.Fields
 	errfields.Add("foo", "bar")
@@ -411,20 +423,68 @@ func TestNilAndZeroValues(t *testing.T) {
 	})
 
 	t.Run("WithCauseNilCause", func(t *testing.T) {
-		// Test WithCause with nil cause - this will panic on Error() call
-		// so we shouldn't call Error(), just test the structure
+		// A nil cause means there is no cause wrapper to preserve.
 		baseErr := pkgerrors.New("base")
 		result := errors.WithCause(baseErr, nil)
-		require.NotNil(t, result)
-
-		// Test that Cause() returns nil
-		causer, ok := result.(interface{ Cause() error })
-		require.True(t, ok)
-		require.Nil(t, causer.Cause())
-
-		// Test that Unwrap() returns the wrapper (baseErr), not the cause
-		require.Equal(t, baseErr, pkgerrors.Unwrap(result))
+		require.Equal(t, baseErr, result)
 	})
+}
+
+func TestTypedNilErrorInputs(t *testing.T) {
+	var typedNil *pointerError
+	var err error = typedNil
+	require.True(t, err != nil)
+
+	require.Nil(t, errors.With(err, "wrap typed nil"))
+	require.Nil(t, errors.With(err, "wrap typed nil").Set(errors.FaultInternal))
+	require.Nil(t, errors.With(err, "wrap typed nil").Err())
+	require.Nil(t, errors.WithNew(err))
+	require.Nil(t, errors.WithNew(err).Set(errors.FaultInternal))
+	require.Nil(t, errors.WithMetadata(err, "key", "value"))
+	require.Nil(t, errors.WithCause(err, nil))
+
+	cause := stderrors.New("cause")
+	require.Equal(t, cause, errors.WithCause(err, cause))
+
+	base := stderrors.New("base")
+	require.Equal(t, base, errors.WithCause(base, err))
+}
+
+func TestPointerErrorHelpersNormalizeTypedNil(t *testing.T) {
+	var typedNil *pointerError
+	var err error = typedNil
+	require.True(t, err != nil)
+
+	errors.Annotate(&err, "annotate")
+	require.Nil(t, err)
+
+	err = typedNil
+	require.True(t, err != nil)
+	errors.AddStack(&err)
+	require.Nil(t, err)
+}
+
+func TestTypedNilBuilderAsErrorIsBenign(t *testing.T) {
+	var builder *errors.Builder
+	var err error = builder
+
+	// This comparison is controlled by Go's interface representation, not by the
+	// errors package. The package can make this value benign, but cannot make this
+	// comparison false while With still returns *Builder.
+	require.True(t, err != nil)
+	require.Equal(t, "<nil>", err.Error())
+	require.Nil(t, stderrors.Unwrap(err))
+	require.Equal(t, 0, errors.GetStatusCode(err))
+	require.Equal(t, errors.FaultUnknown, errors.GetFault(err))
+	require.False(t, errors.IsRetryable(err))
+	require.Nil(t, errors.GetFields(err).List())
+	require.Nil(t, errors.WithMetadata(err, "key", "value"))
+
+	err = returnNilBuilderAsError()
+	require.True(t, err != nil)
+	require.Equal(t, "<nil>", err.Error())
+	require.Nil(t, stderrors.Unwrap(err))
+	require.Nil(t, errors.WithMetadata(err, "key", "value"))
 }
 
 func TestErrorUnwrappingChain(t *testing.T) {
