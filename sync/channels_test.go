@@ -291,25 +291,31 @@ func TestWaitGroupChan_MultipleReads(t *testing.T) {
 
 	ch := WaitGroupChan(&wg)
 
-	done1 := false
-	done2 := false
+	done1 := make(chan struct{})
+	done2 := make(chan struct{})
 
 	go func() {
 		<-ch
-		done1 = true
+		close(done1)
 	}()
 
 	go func() {
 		<-ch
-		done2 = true
+		close(done2)
 	}()
 
-	time.Sleep(10 * time.Millisecond)
 	wg.Done()
-	time.Sleep(50 * time.Millisecond)
 
-	assert.True(t, done1)
-	assert.True(t, done2)
+	select {
+	case <-done1:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first reader never unblocked")
+	}
+	select {
+	case <-done2:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second reader never unblocked")
+	}
 }
 
 // TestWaitGroupChan_ChannelClosedOnce tests that channel is only closed once
