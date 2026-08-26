@@ -21,24 +21,31 @@ type Mailbox[T any] struct {
 	// NOTE: if the capacity is 1, it's possible that an empty Retrieve may occur after a notification.
 	capacity uint64
 
-	// initialCap is the ring buffer's starting size. A drained mailbox whose
-	// buffer has grown far beyond this shrinks back down so a one-off burst
-	// doesn't pin memory forever.
+	// initialCap is the ring buffer's starting size and its shrink target. A
+	// mailbox whose buffer has grown far beyond this shrinks back down once
+	// drained (or mostly drained) so a one-off burst doesn't pin memory
+	// forever.
 	initialCap int
 }
 
-// Creates a new mailbox instance. If name is non-empty, it must be unique and calling Start will launch
-// prometheus metric monitor that periodically reports mailbox load until Close() is called.
+// defaultInitialCap is the ring buffer's starting size when the capacity does
+// not impose a smaller one. Bounded mailboxes do NOT allocate their full
+// capacity up front — the buffer starts here and grows by doubling toward
+// capacity only under load.
+const defaultInitialCap = 100
+
+// NewMailbox creates a mailbox that buffers up to capacity items, dropping the
+// oldest on overflow. Capacity 0 means unbounded.
 func NewMailbox[T any](capacity uint64) *Mailbox[T] {
-	queueCap := capacity
-	if queueCap == 0 {
-		queueCap = 100
+	initialCap := uint64(defaultInitialCap)
+	if capacity > 0 && capacity < initialCap {
+		initialCap = capacity
 	}
 	return &Mailbox[T]{
 		chNotify:   make(chan struct{}, 1),
-		buf:        make([]T, queueCap),
+		buf:        make([]T, initialCap),
 		capacity:   capacity,
-		initialCap: int(queueCap),
+		initialCap: int(initialCap),
 	}
 }
 
@@ -69,7 +76,14 @@ func (m *Mailbox[T]) Deliver(x T) (wasOverCapacity bool) {
 		wasOverCapacity = true
 	}
 	if m.count == len(m.buf) {
-		m.growLocked()
+		newSize := max(2*len(m.buf), 1)
+		if m.capacity > 0 {
+			// A bounded buffer never grows past capacity. The at-capacity
+			// branch above guarantees count < capacity here, so the capped
+			// size still has room for this insert.
+			newSize = min(newSize, int(m.capacity))
+		}
+		m.resizeLocked(newSize)
 	}
 	m.buf[(m.start+m.count)%len(m.buf)] = x
 	m.count++
@@ -97,6 +111,13 @@ func (m *Mailbox[T]) Retrieve() (t T, ok bool) {
 	m.start = (m.start + 1) % len(m.buf)
 	m.count--
 	m.queueLen.Add(-1)
+	// Shrink a ring that grew for a long-since-drained burst: Retrieve-only
+	// consumers never pass through clearLocked, so without this the slot
+	// array stays pinned at its high-water mark forever. The 1/4-occupancy
+	// trigger with a 2x-count target keeps resizes amortized O(1).
+	if len(m.buf) > 4*m.initialCap && m.count < len(m.buf)/4 {
+		m.resizeLocked(max(2*m.count, m.initialCap))
+	}
 	ok = true
 	return
 }
@@ -127,12 +148,13 @@ func (m *Mailbox[T]) RetrieveLatestAndClear() (t T) {
 	return
 }
 
-// growLocked doubles the ring buffer, unwrapping the contents to the front of
-// the new buffer. Caller must hold m.mu.
-func (m *Mailbox[T]) growLocked() {
-	newBuf := make([]T, max(2*len(m.buf), 1))
-	n := copy(newBuf, m.buf[m.start:])
-	copy(newBuf[n:], m.buf[:m.start])
+// resizeLocked replaces the ring buffer with one of newSize slots (which must
+// be >= m.count), unwrapping the contents to the front of the new buffer.
+// Caller must hold m.mu.
+func (m *Mailbox[T]) resizeLocked(newSize int) {
+	newBuf := make([]T, newSize)
+	n := copy(newBuf, m.buf[m.start:min(m.start+m.count, len(m.buf))])
+	copy(newBuf[n:], m.buf[:m.count-n])
 	m.buf = newBuf
 	m.start = 0
 }

@@ -371,6 +371,119 @@ func TestMailbox_DeliverNeverBlocksWithoutReader(t *testing.T) {
 	}
 }
 
+// TestMailbox_BoundedLazyAllocation pins the lazy-allocation contract: a
+// bounded mailbox starts at defaultInitialCap slots (not its full capacity),
+// grows by doubling only under load, never grows past capacity, and keeps
+// exact drop-oldest FIFO semantics across the capped growth.
+func TestMailbox_BoundedLazyAllocation(t *testing.T) {
+	t.Run("large-capacity-starts-small", func(t *testing.T) {
+		m := NewMailbox[int](10_000)
+		require.Len(t, m.buf, defaultInitialCap)
+
+		// Under-capacity load grows the buffer but stays proportional to
+		// count, not capacity.
+		for i := 0; i < 150; i++ {
+			require.False(t, m.Deliver(i))
+		}
+		require.LessOrEqual(t, len(m.buf), 400)
+		require.GreaterOrEqual(t, len(m.buf), 150)
+
+		// Overflow the full capacity: buffer tops out at exactly capacity,
+		// oldest 50 dropped, FIFO preserved.
+		for i := 150; i < 10_050; i++ {
+			over := m.Deliver(i)
+			require.Equal(t, i >= 10_000, over, "delivery %d", i)
+		}
+		require.Len(t, m.buf, 10_000)
+		require.Equal(t, intRange(50, 10_050), m.RetrieveAll())
+	})
+
+	t.Run("small-capacity-allocates-exactly", func(t *testing.T) {
+		for _, capacity := range []uint64{1, 2, 99} {
+			m := NewMailbox[int](capacity)
+			require.Len(t, m.buf, int(capacity))
+		}
+	})
+
+	t.Run("unbounded-starts-at-default", func(t *testing.T) {
+		m := NewMailbox[int](0)
+		require.Len(t, m.buf, defaultInitialCap)
+	})
+}
+
+// TestMailbox_RetrieveShrinksDrainedRing pins the Retrieve-path shrink: a ring
+// grown for a burst shrinks back as a Retrieve-only consumer drains it, instead
+// of staying pinned at its high-water mark (clearLocked never runs on that
+// consumption pattern). FIFO order must survive the mid-drain resizes.
+func TestMailbox_RetrieveShrinksDrainedRing(t *testing.T) {
+	t.Run("full-drain-rests-near-initial-cap", func(t *testing.T) {
+		m := NewMailbox[int](0)
+		const n = 100_000
+		for i := 0; i < n; i++ {
+			m.Deliver(i)
+		}
+		grown := len(m.buf)
+		require.GreaterOrEqual(t, grown, n)
+
+		var got []int
+		for {
+			x, ok := m.Retrieve()
+			if !ok {
+				break
+			}
+			got = append(got, x)
+		}
+		require.Equal(t, intRange(0, n), got)
+		// Incremental shrink disarms once len(buf) <= 4*initialCap, so the
+		// resting size is bounded by that constant — not the 100k high-water
+		// mark. (clearLocked's shrink shares the same 4x threshold.)
+		require.LessOrEqual(t, len(m.buf), 4*defaultInitialCap)
+	})
+
+	t.Run("partial-drain-shrinks-proportionally", func(t *testing.T) {
+		m := NewMailbox[int](0)
+		for i := 0; i < 10_000; i++ {
+			m.Deliver(i)
+		}
+		grown := len(m.buf)
+		// Drain to 1/8 of the grown size — well past the 1/4 trigger.
+		drainTo := grown / 8
+		for m.count > drainTo {
+			_, ok := m.Retrieve()
+			require.True(t, ok)
+		}
+		require.Less(t, len(m.buf), grown)
+		require.GreaterOrEqual(t, len(m.buf), m.count)
+		// The survivors are still FIFO-intact.
+		require.Equal(t, intRange(10_000-m.count, 10_000), m.RetrieveAll())
+	})
+
+	t.Run("shrink-from-wrapped-state", func(t *testing.T) {
+		m := NewMailbox[int](0)
+		// Wrap the ring: fill past one doubling, drain some, refill so start > 0.
+		for i := 0; i < 300; i++ {
+			m.Deliver(i)
+		}
+		for i := 0; i < 200; i++ {
+			_, ok := m.Retrieve()
+			require.True(t, ok)
+		}
+		for i := 300; i < 5_000; i++ {
+			m.Deliver(i)
+		}
+		var got []int
+		for {
+			x, ok := m.Retrieve()
+			if !ok {
+				break
+			}
+			got = append(got, x)
+		}
+		require.Equal(t, intRange(200, 5_000), got)
+		require.LessOrEqual(t, len(m.buf), 4*defaultInitialCap)
+	})
+}
+
 func TestMailbox_load(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
