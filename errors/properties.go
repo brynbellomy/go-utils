@@ -12,9 +12,31 @@ type Fault uint8
 
 const (
 	FaultUnknown Fault = iota
+	// FaultCaller indicates the client/caller is responsible for the error.
 	FaultCaller
+	// FaultInternal indicates the system itself failed (a bug, a resource
+	// exhaustion, or any failure not attributable to a caller or a dependency).
 	FaultInternal
+	// FaultUpstream indicates a dependency the system relies on (an RPC node,
+	// a database, a third-party API) failed.
+	FaultUpstream
 )
+
+// String returns a lowercase, stable, space-free name for the Fault, suitable
+// for use verbatim as a log field or Prometheus label value. Unrecognized
+// values return "unknown".
+func (f Fault) String() string {
+	switch f {
+	case FaultCaller:
+		return "caller"
+	case FaultInternal:
+		return "internal"
+	case FaultUpstream:
+		return "upstream"
+	default:
+		return "unknown"
+	}
+}
 
 type Retryability uint8
 
@@ -23,6 +45,20 @@ const (
 	Retryable
 	NonRetryable
 )
+
+// String returns a lowercase, stable, space-free name for the Retryability,
+// suitable for use verbatim as a log field or Prometheus label value.
+// Unrecognized values return "unknown".
+func (r Retryability) String() string {
+	switch r {
+	case Retryable:
+		return "retryable"
+	case NonRetryable:
+		return "non_retryable"
+	default:
+		return "unknown"
+	}
+}
 
 type StatusCode int
 
@@ -54,6 +90,19 @@ func (f *Fields) Add(fields ...any) {
 
 func (f Fields) List() []any {
 	return f
+}
+
+// Lookup returns the value associated with the first occurrence of key among
+// the Fields' key/value pairs, comparing only string keys. Returns (nil, false)
+// if key is not found. A dangling trailing key (an odd-length Fields with no
+// paired value) is ignored rather than causing a panic.
+func (f Fields) Lookup(key string) (any, bool) {
+	for i := 0; i+1 < len(f); i += 2 {
+		if k, ok := f[i].(string); ok && k == key {
+			return f[i+1], true
+		}
+	}
+	return nil, false
 }
 
 // withMetadata is a unified error wrapper that combines properties (Fault, StatusCode,
@@ -163,16 +212,18 @@ type unwrapper interface {
 	Unwrap() error
 }
 
-// IsRetryable traverses the error chain looking for a Retryable marker.
-// Returns true only if Retryable is explicitly set somewhere in the chain.
-func IsRetryable(err error) bool {
+// GetRetryability traverses the error chain looking for an explicitly set
+// Retryability value. It searches outermost first, and the first explicitly
+// set value (Retryable or NonRetryable) wins. Returns UnknownRetryability if
+// no layer in the chain sets one.
+func GetRetryability(err error) Retryability {
 	for !isNilError(err) {
 		if wm, ok := err.(*withMetadata); ok {
 			if wm.retryability == Retryable {
-				return true
+				return Retryable
 			}
 			if wm.retryability == NonRetryable {
-				return false
+				return NonRetryable
 			}
 			err = normalizeError(wm.parent)
 		} else {
@@ -184,7 +235,13 @@ func IsRetryable(err error) bool {
 			err = normalizeError(unwrapper.Unwrap())
 		}
 	}
-	return false
+	return UnknownRetryability
+}
+
+// IsRetryable traverses the error chain looking for a Retryable marker.
+// Returns true only if Retryable is explicitly set somewhere in the chain.
+func IsRetryable(err error) bool {
+	return GetRetryability(err) == Retryable
 }
 
 // GetStatusCode traverses the error chain and returns the first non-zero status code found.
@@ -261,6 +318,15 @@ func GetFields(err error) Fields {
 // ListFields is an alias for GetFields.
 func ListFields(err error) []any {
 	return GetFields(err)
+}
+
+// LookupField returns the value for the first occurrence of key among the
+// fields collected from err's chain via GetFields (outermost layer first, so
+// an outer layer's field overrides an inner layer's field of the same key).
+// Only string keys are compared. Returns (nil, false) if err is nil, typed-nil,
+// or key is not present in any layer's fields.
+func LookupField(err error, key string) (any, bool) {
+	return GetFields(err).Lookup(key)
 }
 
 func formatLogfmtFields(w io.Writer, fields []any) {

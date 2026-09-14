@@ -68,6 +68,7 @@ const (
     FaultUnknown  Fault = iota  // Zero value
     FaultCaller                 // Client/caller is responsible
     FaultInternal               // Internal system failure
+    FaultUpstream               // A relied-upon dependency (RPC node, database, third-party API) failed
 )
 
 type Retryability uint8
@@ -79,6 +80,12 @@ const (
 
 type StatusCode int  // HTTP status codes for API responses
 ```
+
+`Fault` and `Retryability` both have a `String()` method returning a lowercase,
+stable, space-free name (`"unknown"`, `"caller"`, `"internal"`, `"upstream"` for
+Fault; `"unknown"`, `"retryable"`, `"non_retryable"` for Retryability). These are
+intended to be used verbatim as structured log field values or Prometheus label
+values.
 
 ### Fields
 
@@ -92,9 +99,21 @@ errfs := errors.Fields{
 }
 ```
 
+Use `errors.LookupField(err, key)` (or `Fields.Lookup(key)` on an already-extracted
+`Fields` value) to look up a single field by key instead of scanning `GetFields()`
+by hand. Like `GetFields`, it favors the outermost layer's value when the same key
+appears at multiple layers, and only string keys are considered:
+
+```go
+if val, ok := errors.LookupField(err, "url"); ok {
+    fmt.Println("failed url:", val)
+}
+```
+
 ### Property Traversal
 
-Property getter functions (`GetFault()`, `GetStatusCode()`, `IsRetryable()`) traverse the entire error chain to find values, enabling flexible incremental enrichment:
+Property getter functions (`GetFault()`, `GetStatusCode()`, `IsRetryable()`,
+`GetRetryability()`) traverse the entire error chain to find values, enabling flexible incremental enrichment. `GetRetryability()` returns the `Retryability` value itself (`UnknownRetryability`, `Retryable`, or `NonRetryable`) using the same outermost-first, first-explicit-value-wins traversal as `IsRetryable()`, which is defined in terms of it (`IsRetryable(err) == (GetRetryability(err) == Retryable)`):
 
 ```go
 // Set fault at inner layer

@@ -46,6 +46,16 @@ var (
 	// Join returns an error that wraps the given errors. Any nil error values are discarded.
 	// Join returns nil if every value in errs is nil.
 	Join = stderrors.Join
+	// Is reports whether any error in err's chain matches target. It is the
+	// standard library's errors.Is, re-exported so callers do not need a
+	// second import to check error identity alongside this package's helpers.
+	Is = stderrors.Is
+	// As finds the first error in err's chain that matches target, and if one
+	// is found, sets target to that error value and returns true. It is the
+	// standard library's errors.As, re-exported so callers do not need a
+	// second import to unwrap into a concrete error type alongside this
+	// package's helpers.
+	As = stderrors.As
 )
 
 // Annotate wraps the error pointed to by err with the formatted message if err is non-nil.
