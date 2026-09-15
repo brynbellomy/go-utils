@@ -30,12 +30,16 @@ func With(parent error, args ...any) *Builder {
 }
 
 // WithNew creates a new error or wraps an existing one, returning a Builder.
-// Accepts either a string (to create a new error) or an error (to wrap).
+// Accepts either a string (to create a new error, formatted with args when any
+// are given) or an error (to wrap; args are ignored).
 // Returns nil if the provided error is nil or typed-nil.
 func WithNew(parentOrMsg any, args ...any) *Builder {
 	var err error
 	switch x := parentOrMsg.(type) {
 	case string:
+		if len(args) > 0 {
+			x = fmt.Sprintf(x, args...)
+		}
 		err = New(x)
 	case error:
 		if isNilError(x) {
