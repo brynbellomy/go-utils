@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-
-	"github.com/pkg/errors"
 )
 
 type Fault uint8
@@ -212,30 +210,61 @@ type unwrapper interface {
 	Unwrap() error
 }
 
-// GetRetryability traverses the error chain looking for an explicitly set
-// Retryability value. It searches outermost first, and the first explicitly
-// set value (Retryable or NonRetryable) wins. Returns UnknownRetryability if
-// no layer in the chain sets one.
-func GetRetryability(err error) Retryability {
+// multiUnwrapper is implemented by errors that join more than one error into
+// a tree, such as the value returned by the re-exported Join (stdlib
+// errors.Join).
+type multiUnwrapper interface {
+	Unwrap() []error
+}
+
+// walkProperty traverses err's chain outermost first, descending into a
+// multi-unwrap node's children in order (so errors.Join is supported the
+// same way GetStatusCode has always supported it). At each *withMetadata
+// layer, extract reports whether that layer sets the property being sought;
+// the first layer (searched outer to inner, and for a join, first child to
+// last) for which extract reports true wins, so an outer wrapper around a
+// join still overrides values found inside it. Returns the zero value of T
+// and false if no layer in the chain sets the property.
+func walkProperty[T any](err error, extract func(*withMetadata) (T, bool)) (T, bool) {
+	var zero T
 	for !isNilError(err) {
 		if wm, ok := err.(*withMetadata); ok {
-			if wm.retryability == Retryable {
-				return Retryable
-			}
-			if wm.retryability == NonRetryable {
-				return NonRetryable
+			if v, ok := extract(wm); ok {
+				return v, true
 			}
 			err = normalizeError(wm.parent)
-		} else {
-			// Try unwrapping via standard Unwrap() method
-			unwrapper, ok := err.(unwrapper)
-			if !ok {
-				break
+		} else if multi, ok := err.(multiUnwrapper); ok {
+			for _, child := range multi.Unwrap() {
+				if v, ok := walkProperty(child, extract); ok {
+					return v, true
+				}
 			}
-			err = normalizeError(unwrapper.Unwrap())
+			return zero, false
+		} else if u, ok := err.(unwrapper); ok {
+			err = normalizeError(u.Unwrap())
+		} else {
+			break
 		}
 	}
-	return UnknownRetryability
+	return zero, false
+}
+
+// GetRetryability traverses the error chain looking for an explicitly set
+// Retryability value. It searches outermost first, and the first explicitly
+// set value (Retryable or NonRetryable) wins. Descends into multi-unwrap
+// values (e.g. errors.Join), checking each child in order. Returns
+// UnknownRetryability if no layer in the chain sets one.
+func GetRetryability(err error) Retryability {
+	v, ok := walkProperty(err, func(wm *withMetadata) (Retryability, bool) {
+		if wm.retryability == Retryable || wm.retryability == NonRetryable {
+			return wm.retryability, true
+		}
+		return UnknownRetryability, false
+	})
+	if !ok {
+		return UnknownRetryability
+	}
+	return v
 }
 
 // IsRetryable traverses the error chain looking for a Retryable marker.
@@ -248,66 +277,54 @@ func IsRetryable(err error) bool {
 // Outer layers override inner layers when explicitly set.
 // Supports errors.Join by checking multiple unwrapped errors.
 func GetStatusCode(err error) int {
-	for !isNilError(err) {
-		if wm, ok := err.(*withMetadata); ok {
-			if wm.statusCode != 0 {
-				return int(wm.statusCode)
-			}
-			err = normalizeError(wm.parent)
-		} else {
-			// Try unwrapping via multi-error Unwrap() []error (e.g., errors.Join)
-			if multiUnwrapper, ok := err.(interface{ Unwrap() []error }); ok {
-				for _, e := range multiUnwrapper.Unwrap() {
-					if code := GetStatusCode(e); code != 0 {
-						return code
-					}
-				}
-				return 0
-			}
-
-			// Try unwrapping via standard Unwrap() error
-			unwrapper, ok := err.(unwrapper)
-			if !ok {
-				break
-			}
-			err = normalizeError(unwrapper.Unwrap())
+	v, ok := walkProperty(err, func(wm *withMetadata) (int, bool) {
+		if wm.statusCode != 0 {
+			return int(wm.statusCode), true
 		}
+		return 0, false
+	})
+	if !ok {
+		return 0
 	}
-	return 0
+	return v
 }
 
 // GetFault traverses the error chain and returns the first non-unknown fault found.
-// Outer layers override inner layers when explicitly set.
+// Outer layers override inner layers when explicitly set. Descends into
+// multi-unwrap values (e.g. errors.Join), checking each child in order.
 func GetFault(err error) Fault {
-	for !isNilError(err) {
-		if wm, ok := err.(*withMetadata); ok {
-			if wm.fault != FaultUnknown {
-				return wm.fault
-			}
-			err = normalizeError(wm.parent)
-		} else {
-			// Try unwrapping via standard Unwrap() method
-			unwrapper, ok := err.(unwrapper)
-			if !ok {
-				break
-			}
-			err = normalizeError(unwrapper.Unwrap())
+	v, ok := walkProperty(err, func(wm *withMetadata) (Fault, bool) {
+		if wm.fault != FaultUnknown {
+			return wm.fault, true
 		}
+		return FaultUnknown, false
+	})
+	if !ok {
+		return FaultUnknown
 	}
-	return FaultUnknown
+	return v
 }
 
-// GetFields extracts all fields from an error chain.
-// It traverses the error chain and collects fields from all withMetadata wrappers.
+// GetFields extracts all fields from an error chain, outermost layer first.
+// At a multi-unwrap node (e.g. errors.Join), it collects from each child in
+// order (each child walked outer to inner) and concatenates the results;
+// fields are never deduplicated, since Fields.Lookup already returns the
+// first (outermost/earliest) match for a given key.
 func GetFields(err error) Fields {
-	var fields []any
+	var fields Fields
 	for !isNilError(err) {
-		wm := &withMetadata{}
-		if errors.As(err, &wm) {
+		if wm, ok := err.(*withMetadata); ok {
 			if len(wm.fields) > 0 {
 				fields = append(fields, wm.fields...)
 			}
 			err = normalizeError(wm.parent)
+		} else if multi, ok := err.(multiUnwrapper); ok {
+			for _, child := range multi.Unwrap() {
+				fields = append(fields, GetFields(child)...)
+			}
+			return fields
+		} else if u, ok := err.(unwrapper); ok {
+			err = normalizeError(u.Unwrap())
 		} else {
 			break
 		}

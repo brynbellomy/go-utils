@@ -130,6 +130,7 @@ errors.GetFault(err2)  // Returns FaultInternal (found in err1)
 - Outer layers can override inner values when explicitly set
 - All fields are collected from all layers via `GetFields()`
 - Properties set at any layer remain accessible
+- `GetFault()`, `GetRetryability()`, `GetStatusCode()`, and `GetFields()` all descend into multi-error values (anything implementing `Unwrap() []error`, such as the re-exported `Join`): at a join, the property getters check each child in order and return the first explicit value found, so an outer wrapper around a join still overrides whatever the join's children carry, while `GetFields()` instead concatenates every child's fields (each child walked outer → inner) rather than stopping at the first match.
 
 **Override Example**:
 ```go

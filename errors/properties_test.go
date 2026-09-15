@@ -197,6 +197,133 @@ func TestFieldsLookup(t *testing.T) {
 	})
 }
 
+func TestGetFault_JoinedErrors(t *testing.T) {
+	baseErr := pkgerrors.New("base error")
+
+	t.Run("SingleJoinedClassifiedError", func(t *testing.T) {
+		classified := errors.WithMetadata(baseErr, errors.FaultInternal)
+		joined := errors.Join(classified)
+		require.Equal(t, errors.FaultInternal, errors.GetFault(joined))
+	})
+
+	t.Run("FoundInSecondChild", func(t *testing.T) {
+		unclassified := pkgerrors.New("plain error")
+		classified := errors.WithMetadata(baseErr, errors.FaultCaller)
+		joined := errors.Join(unclassified, classified)
+		require.Equal(t, errors.FaultCaller, errors.GetFault(joined))
+	})
+
+	t.Run("OuterMetadataOverridesJoinedChild", func(t *testing.T) {
+		inner := errors.WithMetadata(baseErr, errors.FaultCaller)
+		joined := errors.Join(inner)
+		outer := errors.WithMetadata(joined, errors.FaultInternal)
+		require.Equal(t, errors.FaultInternal, errors.GetFault(outer))
+	})
+
+	t.Run("JoinNestedInsideWrapInsideJoin", func(t *testing.T) {
+		innermost := errors.WithMetadata(baseErr, errors.FaultUpstream)
+		innerJoin := errors.Join(innermost)
+		wrapped := pkgerrors.Wrap(innerJoin, "wrapped")
+		outerJoin := errors.Join(wrapped)
+		require.Equal(t, errors.FaultUpstream, errors.GetFault(outerJoin))
+	})
+
+	t.Run("NoClassifiedChild", func(t *testing.T) {
+		joined := errors.Join(pkgerrors.New("a"), pkgerrors.New("b"))
+		require.Equal(t, errors.FaultUnknown, errors.GetFault(joined))
+	})
+}
+
+func TestGetRetryability_JoinedErrors(t *testing.T) {
+	baseErr := pkgerrors.New("base error")
+
+	t.Run("SingleJoinedClassifiedError", func(t *testing.T) {
+		classified := errors.WithMetadata(baseErr, errors.NonRetryable)
+		joined := errors.Join(classified)
+		require.Equal(t, errors.NonRetryable, errors.GetRetryability(joined))
+		require.False(t, errors.IsRetryable(joined))
+	})
+
+	t.Run("FoundInSecondChild", func(t *testing.T) {
+		unclassified := pkgerrors.New("plain error")
+		classified := errors.WithMetadata(baseErr, errors.Retryable)
+		joined := errors.Join(unclassified, classified)
+		require.Equal(t, errors.Retryable, errors.GetRetryability(joined))
+		require.True(t, errors.IsRetryable(joined))
+	})
+
+	t.Run("OuterMetadataOverridesJoinedChild", func(t *testing.T) {
+		inner := errors.WithMetadata(baseErr, errors.Retryable)
+		joined := errors.Join(inner)
+		outer := errors.WithMetadata(joined, errors.NonRetryable)
+		require.Equal(t, errors.NonRetryable, errors.GetRetryability(outer))
+		require.False(t, errors.IsRetryable(outer))
+	})
+
+	t.Run("JoinNestedInsideWrapInsideJoin", func(t *testing.T) {
+		innermost := errors.WithMetadata(baseErr, errors.Retryable)
+		innerJoin := errors.Join(innermost)
+		wrapped := pkgerrors.Wrap(innerJoin, "wrapped")
+		outerJoin := errors.Join(wrapped)
+		require.Equal(t, errors.Retryable, errors.GetRetryability(outerJoin))
+		require.True(t, errors.IsRetryable(outerJoin))
+	})
+
+	t.Run("NoClassifiedChild", func(t *testing.T) {
+		joined := errors.Join(pkgerrors.New("a"), pkgerrors.New("b"))
+		require.Equal(t, errors.UnknownRetryability, errors.GetRetryability(joined))
+		require.False(t, errors.IsRetryable(joined))
+	})
+}
+
+func TestGetFields_JoinedErrors(t *testing.T) {
+	t.Run("BothChildrenContributeInOrder", func(t *testing.T) {
+		a := errors.WithMetadata(pkgerrors.New("error a"), "k", 1)
+		b := errors.WithMetadata(pkgerrors.New("error b"), "k", 2)
+		joined := errors.Join(a, b)
+
+		fields := errors.GetFields(joined).List()
+		require.Equal(t, []any{"k", 1, "k", 2}, fields)
+
+		val, ok := errors.LookupField(joined, "k")
+		require.True(t, ok)
+		require.Equal(t, 1, val)
+	})
+
+	t.Run("EachChildWalkedOuterToInner", func(t *testing.T) {
+		aInner := errors.WithMetadata(pkgerrors.New("a inner"), "level", "inner-a")
+		aOuter := errors.WithMetadata(aInner, "level", "outer-a")
+		bInner := errors.WithMetadata(pkgerrors.New("b inner"), "level", "inner-b")
+		bOuter := errors.WithMetadata(bInner, "level", "outer-b")
+		joined := errors.Join(aOuter, bOuter)
+
+		fields := errors.GetFields(joined).List()
+		require.Equal(t, []any{
+			"level", "outer-a", "level", "inner-a",
+			"level", "outer-b", "level", "inner-b",
+		}, fields)
+
+		val, ok := errors.LookupField(joined, "level")
+		require.True(t, ok)
+		require.Equal(t, "outer-a", val)
+	})
+
+	t.Run("JoinNestedInsideWrapInsideJoin", func(t *testing.T) {
+		innermost := errors.WithMetadata(pkgerrors.New("base"), "key", "value")
+		innerJoin := errors.Join(innermost)
+		wrapped := pkgerrors.Wrap(innerJoin, "wrapped")
+		outerJoin := errors.Join(wrapped)
+
+		fields := errors.GetFields(outerJoin).List()
+		require.Equal(t, []any{"key", "value"}, fields)
+	})
+
+	t.Run("NoFieldsInAnyChild", func(t *testing.T) {
+		joined := errors.Join(pkgerrors.New("a"), pkgerrors.New("b"))
+		require.Empty(t, errors.GetFields(joined).List())
+	})
+}
+
 func TestIsAsReExports(t *testing.T) {
 	sentinel := stderrors.New("sentinel error")
 	wrapped := pkgerrors.Wrap(sentinel, "wrapped")
