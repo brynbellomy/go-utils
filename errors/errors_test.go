@@ -30,7 +30,7 @@ func TestBuilderWithStatusCode(t *testing.T) {
 	errfields.Add("foo", "bar")
 	cause := errors.New("blah")
 	baseErr := errors.WithMetadata(errors.New("internal server error"), errors.StatusCode(http.StatusInternalServerError))
-	err := errors.With(baseErr, "could not store artifact").Cause(cause).Set(errfields)
+	err := errors.With(baseErr, "could not store artifact").CausedBy(cause).Set(errfields)
 	require.Equal(t, http.StatusInternalServerError, errors.GetStatusCode(err))
 }
 

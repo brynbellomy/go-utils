@@ -1,10 +1,17 @@
 package errors
 
-import "fmt"
+import (
+	"fmt"
+	"io"
+)
 
 // Builder provides a fluent interface for constructing errors with properties and fields.
 // All Builder methods safely handle nil receivers, returning nil without panicking.
 // This allows safe chaining even when the initial error is nil.
+// Builder methods never modify their receiver; each returns a new Builder, so a
+// Builder can be shared or stored without later chains altering it.
+// A non-nil Builder formats, unwraps, and reports its cause exactly as the error
+// it holds does, so it can be returned as an error without calling Err.
 type Builder struct {
 	error
 }
@@ -59,6 +66,29 @@ func (b *Builder) Error() string {
 	return b.error.Error()
 }
 
+// Format formats the Builder exactly as the error it holds, preserving verbose
+// (%+v) output such as stack traces.
+func (b *Builder) Format(s fmt.State, verb rune) {
+	if b == nil || isNilError(b.error) {
+		io.WriteString(s, nilErrorString)
+		return
+	}
+	if f, ok := b.error.(fmt.Formatter); ok {
+		f.Format(s, verb)
+		return
+	}
+	fmt.Fprintf(s, fmt.FormatString(s, verb), b.error)
+}
+
+// Cause returns the underlying error, implementing the causer interface from
+// github.com/pkg/errors so that Cause traverses through Builder instances.
+func (b *Builder) Cause() error {
+	if b == nil {
+		return nil
+	}
+	return normalizeError(b.error)
+}
+
 // Err returns the underlying error from the Builder.
 // Returns nil if the Builder is nil.
 func (b *Builder) Err() error {
@@ -81,32 +111,29 @@ func (b *Builder) Wrap(msg string) *Builder {
 	if b == nil || isNilError(b.error) {
 		return nil
 	}
-	b.error = Wrap(b.error, msg)
-	return b
+	return &Builder{error: Wrap(b.error, msg)}
 }
 
 func (b *Builder) Wrapf(msg string, args ...any) *Builder {
 	if b == nil || isNilError(b.error) {
 		return nil
 	}
-	b.error = Wrapf(b.error, msg, args...)
-	return b
+	return &Builder{error: Wrapf(b.error, msg, args...)}
 }
 
-func (b *Builder) Cause(cause error) *Builder {
+// CausedBy records cause as the cause of the Builder's error.
+func (b *Builder) CausedBy(cause error) *Builder {
 	if b == nil || isNilError(b.error) {
 		return nil
 	}
-	b.error = WithCause(b.error, cause)
-	return b
+	return &Builder{error: WithCause(b.error, cause)}
 }
 
 func (b *Builder) Stack() *Builder {
 	if b == nil || isNilError(b.error) {
 		return nil
 	}
-	b.error = WithStack(b.error)
-	return b
+	return &Builder{error: WithStack(b.error)}
 }
 
 // Set adds properties and/or fields to the error in a single call.
@@ -117,6 +144,5 @@ func (b *Builder) Set(things ...any) *Builder {
 	if b == nil || isNilError(b.error) {
 		return nil
 	}
-	b.error = WithMetadata(b.error, things...)
-	return b
+	return &Builder{error: WithMetadata(b.error, things...)}
 }

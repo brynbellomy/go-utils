@@ -58,7 +58,33 @@ The fluent builder methods also remain nil-safe:
 return errors.With(err, "context").Set(errors.FaultInternal)
 ```
 
-If `err` is nil or typed-nil, the chain returns a nil `*Builder`. Go will still box that nil pointer as a non-nil `error` if it is returned directly from a function with return type `error`; no package implementation can change that while `With` continues to return `*Builder`. Use `.Err()` when the parent error may be nil and the value is being converted directly to `error`.
+If `err` is nil or typed-nil, the chain returns a nil `*Builder`. Go will still box that nil pointer as a non-nil `error` if it is returned directly from a function with return type `error`; no package implementation can change that while `With` continues to return `*Builder`. Use `.Err()` when the parent error may be nil and the value is being converted directly to `error`:
+
+```go
+// err may be nil here: .Err() is required
+return errors.With(err, "context").Set(errors.FaultInternal).Err()
+
+// err is known non-nil: the Builder can be returned directly
+if err != nil {
+    return errors.With(err, "context").Set(errors.FaultInternal)
+}
+```
+
+### Builder Semantics
+
+A non-nil `*Builder` is transparent: it formats (including `%+v` stack traces), unwraps, and reports its `Cause()` exactly as the error it holds does, so `errors.Is`, `errors.As`, `errors.Cause`, `OneOf`, and the property getters behave identically whether or not `.Err()` is called.
+
+Builder methods never modify their receiver. Each call returns a new `*Builder`, so a stored or shared Builder is never altered by later chains.
+
+The HTTP sentinels (`ErrNotFound`, `ErrBadRequest`, etc.) are plain `error` values. Wrap them with `With` to add context while preserving identity:
+
+```go
+err := errors.With(errors.ErrNotFound, "user %d", id).Set("id", id)
+errors.Is(err, errors.ErrNotFound) // true
+errors.GetStatusCode(err)          // 404
+```
+
+`ErrTooManyRequests` and `ErrServiceUnavailable` are marked `Retryable`.
 
 ### Properties
 

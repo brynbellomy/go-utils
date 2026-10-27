@@ -61,14 +61,14 @@ func (r Retryability) String() string {
 type StatusCode int
 
 var (
-	ErrBadRequest          = WithNew("bad request").Set(StatusCode(http.StatusBadRequest), FaultCaller)
-	ErrUnauthorized        = WithNew("unauthorized").Set(StatusCode(http.StatusUnauthorized), FaultCaller)
-	ErrForbidden           = WithNew("forbidden").Set(StatusCode(http.StatusForbidden), FaultCaller)
-	ErrNotFound            = WithNew("not found").Set(StatusCode(http.StatusNotFound), FaultCaller)
-	ErrTooManyRequests     = WithNew("too many requests").Set(StatusCode(http.StatusTooManyRequests), FaultCaller)
-	ErrUnimplemented       = WithNew("not implemented").Set(StatusCode(http.StatusNotImplemented), FaultCaller)
-	ErrInternalServerError = WithNew("internal server error").Set(StatusCode(http.StatusInternalServerError), FaultInternal)
-	ErrServiceUnavailable  = WithNew("service unavailable").Set(StatusCode(http.StatusServiceUnavailable), FaultInternal)
+	ErrBadRequest          = WithNew("bad request").Set(StatusCode(http.StatusBadRequest), FaultCaller).Err()
+	ErrUnauthorized        = WithNew("unauthorized").Set(StatusCode(http.StatusUnauthorized), FaultCaller).Err()
+	ErrForbidden           = WithNew("forbidden").Set(StatusCode(http.StatusForbidden), FaultCaller).Err()
+	ErrNotFound            = WithNew("not found").Set(StatusCode(http.StatusNotFound), FaultCaller).Err()
+	ErrTooManyRequests     = WithNew("too many requests").Set(StatusCode(http.StatusTooManyRequests), FaultCaller, Retryable).Err()
+	ErrUnimplemented       = WithNew("not implemented").Set(StatusCode(http.StatusNotImplemented), FaultCaller).Err()
+	ErrInternalServerError = WithNew("internal server error").Set(StatusCode(http.StatusInternalServerError), FaultInternal).Err()
+	ErrServiceUnavailable  = WithNew("service unavailable").Set(StatusCode(http.StatusServiceUnavailable), FaultInternal, Retryable).Err()
 )
 
 // Fields represents structured key-value pairs for logging. Fields are formatted
@@ -165,6 +165,12 @@ func (wm *withMetadata) Unwrap() error {
 		return nil
 	}
 	return normalizeError(wm.parent)
+}
+
+// Cause returns the parent error, implementing the causer interface from
+// github.com/pkg/errors so that Cause traverses through metadata layers.
+func (wm *withMetadata) Cause() error {
+	return wm.Unwrap()
 }
 
 func (wm *withMetadata) Format(s fmt.State, verb rune) {
