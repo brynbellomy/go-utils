@@ -3,9 +3,18 @@ package errors
 import (
 	"fmt"
 	"io"
-	"net/http"
+	"log/slog"
 )
 
+// Option is a typed item accepted by New, Wrap, WithMetadata, and
+// (*Error).Set that sets a property or appends fields. Kind, Fault,
+// Retryability, StatusCode, Fields, and the values returned by Prop are
+// Options.
+type Option interface {
+	applyTo(e *Error)
+}
+
+// Fault attributes an error to the party responsible for it.
 type Fault uint8
 
 const (
@@ -19,6 +28,8 @@ const (
 	// a database, a third-party API) failed.
 	FaultUpstream
 )
+
+var _ Option = FaultUnknown
 
 // String returns a lowercase, stable, space-free name for the Fault, suitable
 // for use verbatim as a log field or Prometheus label value. Unrecognized
@@ -36,6 +47,25 @@ func (f Fault) String() string {
 	}
 }
 
+func (f Fault) applyTo(e *Error) { e.fault = f }
+
+// severity orders Faults for combining the children of a join: a join is
+// attributed to the most severe Fault among its children.
+func (f Fault) severity() int {
+	switch f {
+	case FaultInternal:
+		return 3
+	case FaultUpstream:
+		return 2
+	case FaultCaller:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// Retryability reports whether retrying the operation that produced an error
+// may succeed.
 type Retryability uint8
 
 const (
@@ -43,6 +73,8 @@ const (
 	Retryable
 	NonRetryable
 )
+
+var _ Option = UnknownRetryability
 
 // String returns a lowercase, stable, space-free name for the Retryability,
 // suitable for use verbatim as a log field or Prometheus label value.
@@ -58,34 +90,30 @@ func (r Retryability) String() string {
 	}
 }
 
+func (r Retryability) applyTo(e *Error) { e.retry = r }
+
+// StatusCode is an explicit HTTP status code for an error, overriding the
+// default of its Kind.
 type StatusCode int
 
-var (
-	ErrBadRequest          = WithNew("bad request").Set(StatusCode(http.StatusBadRequest), FaultCaller).Err()
-	ErrUnauthorized        = WithNew("unauthorized").Set(StatusCode(http.StatusUnauthorized), FaultCaller).Err()
-	ErrForbidden           = WithNew("forbidden").Set(StatusCode(http.StatusForbidden), FaultCaller).Err()
-	ErrNotFound            = WithNew("not found").Set(StatusCode(http.StatusNotFound), FaultCaller).Err()
-	ErrTooManyRequests     = WithNew("too many requests").Set(StatusCode(http.StatusTooManyRequests), FaultCaller, Retryable).Err()
-	ErrUnimplemented       = WithNew("not implemented").Set(StatusCode(http.StatusNotImplemented), FaultCaller).Err()
-	ErrInternalServerError = WithNew("internal server error").Set(StatusCode(http.StatusInternalServerError), FaultInternal).Err()
-	ErrServiceUnavailable  = WithNew("service unavailable").Set(StatusCode(http.StatusServiceUnavailable), FaultInternal, Retryable).Err()
-)
+var _ Option = StatusCode(0)
 
-// Fields represents structured key-value pairs for logging. Fields are formatted
-// as logfmt when the error is printed: "error message key1=value1 key2="quoted value"".
-// Use %s or %v to include fields in output; %q outputs only the error message.
+func (c StatusCode) applyTo(e *Error) { e.status = c }
+
+// Fields represents structured key-value pairs for logging. Fields never
+// appear in Error(), %s, or %v; %+v prints them in logfmt form after the
+// message, and LogValue exposes them to log/slog.
 type Fields []any
+
+var _ Option = Fields(nil)
 
 // Add appends additional key-value pairs to the Fields slice.
 // Can be called incrementally to build up context as it becomes available.
 func (f *Fields) Add(fields ...any) {
-	if f == nil {
-		arr := Fields(make([]any, 0, len(fields)))
-		f = &arr
-	}
 	*f = append(*f, fields...)
 }
 
+// List returns the Fields as a flat slice of alternating keys and values.
 func (f Fields) List() []any {
 	return f
 }
@@ -103,112 +131,53 @@ func (f Fields) Lookup(key string) (any, bool) {
 	return nil, false
 }
 
-// withMetadata is a unified error wrapper that combines properties (Fault, StatusCode,
-// Retryability) and fields (key-value pairs for logging) in a single allocation.
-type withMetadata struct {
-	parent       error
-	fault        Fault
-	statusCode   StatusCode
-	retryability Retryability
-	fields       Fields
+func (f Fields) applyTo(e *Error) { e.fields = append(e.fields, f...) }
+
+// prop is the Option returned by Prop.
+type prop struct{ v any }
+
+func (p prop) applyTo(e *Error) { e.props = append(e.props, p.v) }
+
+// Prop returns an Option attaching v to an error as a custom property,
+// retrievable with Lookup. Properties are distinguished by type: define a
+// named type per property.
+//
+//	type TenantID string
+//	err := errors.Wrap(err, "load tenant", errors.Prop(TenantID("acme")))
+//	id, ok := errors.Lookup[TenantID](err)
+func Prop(v any) Option { return prop{v} }
+
+// Lookup returns the custom property of type T attached with Prop to the
+// outermost layer of err's chain that has one. A property matches when it is
+// assignable to T, so T may be an interface type. Searches an *Error's
+// wrapped error before its cause and a join's children first to last.
+func Lookup[T any](err error) (T, bool) {
+	return find(err, func(err error) (T, bool) {
+		var zero T
+		e, ok := err.(*Error)
+		if !ok {
+			return zero, false
+		}
+		for i := len(e.props) - 1; i >= 0; i-- {
+			if v, ok := e.props[i].(T); ok {
+				return v, true
+			}
+		}
+		return zero, false
+	})
 }
 
-// WithMetadata wraps an error with properties and/or fields.
-// Accepts Fault, StatusCode, Retryability, Fields, and individual field values.
-// Returns nil if err is nil or typed-nil.
-func WithMetadata(err error, items ...any) error {
-	if isNilError(err) {
-		return nil
-	}
-
-	wm := &withMetadata{
-		parent: err,
-	}
-
-	var pendingFields []any
-
+// apply applies items to e as documented on (*Error).Set.
+func (e *Error) apply(items []any) {
 	for _, item := range items {
 		switch v := item.(type) {
-		case Fault:
-			wm.fault = v
-		case StatusCode:
-			wm.statusCode = v
-		case Retryability:
-			wm.retryability = v
-		case Fields:
-			pendingFields = append(pendingFields, v...)
+		case Option:
+			v.applyTo(e)
+		case slog.Attr:
+			e.fields = append(e.fields, v.Key, v.Value.Any())
 		default:
-			// Treat as individual field key or value
-			pendingFields = append(pendingFields, v)
+			e.fields = append(e.fields, v)
 		}
-	}
-
-	if len(pendingFields) > 0 {
-		wm.fields = pendingFields
-	}
-
-	return wm
-}
-
-func (wm *withMetadata) Error() string {
-	if wm == nil {
-		return nilErrorString
-	}
-	if !isNilError(wm.parent) {
-		return wm.parent.Error()
-	}
-	return "error with metadata"
-}
-
-func (wm *withMetadata) Unwrap() error {
-	if wm == nil {
-		return nil
-	}
-	return normalizeError(wm.parent)
-}
-
-// Cause returns the parent error, implementing the causer interface from
-// github.com/pkg/errors so that Cause traverses through metadata layers.
-func (wm *withMetadata) Cause() error {
-	return wm.Unwrap()
-}
-
-func (wm *withMetadata) Format(s fmt.State, verb rune) {
-	if wm == nil {
-		io.WriteString(s, nilErrorString)
-		return
-	}
-
-	switch verb {
-	case 'v':
-		if s.Flag('+') {
-			// Verbose format: show parent error with stack if available
-			if !isNilError(wm.parent) {
-				fmt.Fprintf(s, "%+v", wm.parent)
-			} else {
-				io.WriteString(s, "error with metadata")
-			}
-		} else {
-			// Standard %v format
-			io.WriteString(s, wm.Error())
-		}
-		// Add all fields in logfmt format
-		allFields := GetFields(wm)
-		if len(allFields) > 0 {
-			io.WriteString(s, " ")
-			formatLogfmtFields(s, allFields)
-		}
-	case 's':
-		io.WriteString(s, wm.Error())
-		// Add all fields in logfmt format
-		allFields := GetFields(wm)
-		if len(allFields) > 0 {
-			io.WriteString(s, " ")
-			formatLogfmtFields(s, allFields)
-		}
-	case 'q':
-		// For quoted format, just quote the error message without fields
-		fmt.Fprintf(s, "%q", wm.Error())
 	}
 }
 
@@ -217,128 +186,215 @@ type unwrapper interface {
 }
 
 // multiUnwrapper is implemented by errors that join more than one error into
-// a tree, such as the value returned by the re-exported Join (stdlib
-// errors.Join).
+// a tree, such as the value returned by Join.
 type multiUnwrapper interface {
 	Unwrap() []error
 }
 
-// walkProperty traverses err's chain outermost first, descending into a
-// multi-unwrap node's children in order (so errors.Join is supported the
-// same way GetStatusCode has always supported it). At each *withMetadata
-// layer, extract reports whether that layer sets the property being sought;
-// the first layer (searched outer to inner, and for a join, first child to
-// last) for which extract reports true wins, so an outer wrapper around a
-// join still overrides values found inside it. Returns the zero value of T
-// and false if no layer in the chain sets the property.
-func walkProperty[T any](err error, extract func(*withMetadata) (T, bool)) (T, bool) {
+// children returns the errors err directly wraps, in search order: an
+// *Error's wrapped error then its cause, a join's children first to last, or
+// the result of a single-error Unwrap.
+func children(err error) []error {
+	switch e := err.(type) {
+	case *Error:
+		var out []error
+		if parent := normalizeError(e.parent); parent != nil {
+			out = append(out, parent)
+		}
+		if cause := normalizeError(e.cause); cause != nil {
+			out = append(out, cause)
+		}
+		return out
+	case multiUnwrapper:
+		return e.Unwrap()
+	case unwrapper:
+		if inner := normalizeError(e.Unwrap()); inner != nil {
+			return []error{inner}
+		}
+	}
+	return nil
+}
+
+func hasChildren(err error) bool {
+	return len(children(err)) > 0
+}
+
+// find searches err's chain outermost first, an *Error's wrapped error
+// before its cause and a join's children first to last, and returns the
+// first value local reports for an error in the chain.
+func find[T any](err error, local func(error) (T, bool)) (T, bool) {
 	var zero T
-	for !isNilError(err) {
-		if wm, ok := err.(*withMetadata); ok {
-			if v, ok := extract(wm); ok {
-				return v, true
-			}
-			err = normalizeError(wm.parent)
-		} else if multi, ok := err.(multiUnwrapper); ok {
-			for _, child := range multi.Unwrap() {
-				if v, ok := walkProperty(child, extract); ok {
-					return v, true
-				}
-			}
-			return zero, false
-		} else if u, ok := err.(unwrapper); ok {
-			err = normalizeError(u.Unwrap())
-		} else {
-			break
+	if isNilError(err) {
+		return zero, false
+	}
+	if v, ok := local(err); ok {
+		return v, true
+	}
+	for _, child := range children(err) {
+		if v, ok := find(child, local); ok {
+			return v, true
 		}
 	}
 	return zero, false
 }
 
-// GetRetryability traverses the error chain looking for an explicitly set
-// Retryability value. It searches outermost first, and the first explicitly
-// set value (Retryable or NonRetryable) wins. Descends into multi-unwrap
-// values (e.g. errors.Join), checking each child in order. Returns
-// UnknownRetryability if no layer in the chain sets one.
+// resolve searches err's chain like find, except at a join, where it
+// resolves every child and combines their results with combine. found[i]
+// reports whether child i's chain set the property.
+func resolve[T any](err error, local func(error) (T, bool), combine func(vals []T, found []bool) (T, bool)) (T, bool) {
+	var zero T
+	if isNilError(err) {
+		return zero, false
+	}
+	if v, ok := local(err); ok {
+		return v, true
+	}
+	kids := children(err)
+	if _, isJoin := err.(multiUnwrapper); isJoin {
+		vals := make([]T, len(kids))
+		found := make([]bool, len(kids))
+		for i, child := range kids {
+			vals[i], found[i] = resolve(child, local, combine)
+		}
+		return combine(vals, found)
+	}
+	for _, child := range kids {
+		if v, ok := resolve(child, local, combine); ok {
+			return v, true
+		}
+	}
+	return zero, false
+}
+
+// GetFault returns the Fault of the outermost layer of err's chain that sets
+// one, either explicitly or through the default of the Kind it sets (an
+// explicit Fault on a layer overrides that layer's Kind). Searches an
+// *Error's wrapped error before its cause. A join is attributed to the most
+// severe Fault among its children: FaultInternal, then FaultUpstream, then
+// FaultCaller. Returns FaultUnknown if no layer sets a Fault.
+func GetFault(err error) Fault {
+	f, _ := resolve(err, faultOf, func(vals []Fault, found []bool) (Fault, bool) {
+		best := FaultUnknown
+		for i, f := range vals {
+			if found[i] && f.severity() > best.severity() {
+				best = f
+			}
+		}
+		return best, best != FaultUnknown
+	})
+	return f
+}
+
+func faultOf(err error) (Fault, bool) {
+	switch e := err.(type) {
+	case *Error:
+		if e.fault != FaultUnknown {
+			return e.fault, true
+		}
+		f := e.kind.Fault()
+		return f, f != FaultUnknown
+	case Kind:
+		f := e.Fault()
+		return f, f != FaultUnknown
+	default:
+		return FaultUnknown, false
+	}
+}
+
+// GetRetryability returns the Retryability of the outermost layer of err's
+// chain that sets one, either explicitly or through the default of the Kind
+// it sets (an explicit Retryability on a layer overrides that layer's Kind).
+// Searches an *Error's wrapped error before its cause. A join is NonRetryable
+// if any child is NonRetryable, Retryable if every child is Retryable, and
+// UnknownRetryability otherwise. Returns UnknownRetryability if no layer sets
+// a Retryability.
 func GetRetryability(err error) Retryability {
-	v, ok := walkProperty(err, func(wm *withMetadata) (Retryability, bool) {
-		if wm.retryability == Retryable || wm.retryability == NonRetryable {
-			return wm.retryability, true
+	r, _ := resolve(err, retryOf, func(vals []Retryability, found []bool) (Retryability, bool) {
+		all := len(vals) > 0
+		for i, r := range vals {
+			if found[i] && r == NonRetryable {
+				return NonRetryable, true
+			}
+			all = all && found[i] && r == Retryable
+		}
+		if all {
+			return Retryable, true
 		}
 		return UnknownRetryability, false
 	})
-	if !ok {
-		return UnknownRetryability
-	}
-	return v
+	return r
 }
 
-// IsRetryable traverses the error chain looking for a Retryable marker.
-// Returns true only if Retryable is explicitly set somewhere in the chain.
+func retryOf(err error) (Retryability, bool) {
+	switch e := err.(type) {
+	case *Error:
+		if e.retry != UnknownRetryability {
+			return e.retry, true
+		}
+		r := e.kind.Retryability()
+		return r, r != UnknownRetryability
+	case Kind:
+		r := e.Retryability()
+		return r, r != UnknownRetryability
+	default:
+		return UnknownRetryability, false
+	}
+}
+
+// IsRetryable reports whether GetRetryability(err) is Retryable.
 func IsRetryable(err error) bool {
 	return GetRetryability(err) == Retryable
 }
 
-// GetStatusCode traverses the error chain and returns the first non-zero status code found.
-// Outer layers override inner layers when explicitly set.
-// Supports errors.Join by checking multiple unwrapped errors.
+// GetStatusCode returns the HTTP status code of the outermost layer of err's
+// chain that sets one, either explicitly with StatusCode or through the
+// default of the Kind it sets (an explicit StatusCode on a layer overrides
+// that layer's Kind). Searches an *Error's wrapped error before its cause and
+// a join's children first to last. Returns 0 if no layer sets a status code.
 func GetStatusCode(err error) int {
-	v, ok := walkProperty(err, func(wm *withMetadata) (int, bool) {
-		if wm.statusCode != 0 {
-			return int(wm.statusCode), true
+	c, _ := find(err, func(err error) (int, bool) {
+		switch e := err.(type) {
+		case *Error:
+			if e.status != 0 {
+				return int(e.status), true
+			}
+			c := e.kind.StatusCode()
+			return c, c != 0
+		case Kind:
+			c := e.StatusCode()
+			return c, c != 0
+		default:
+			return 0, false
 		}
-		return 0, false
 	})
-	if !ok {
-		return 0
-	}
-	return v
+	return c
 }
 
-// GetFault traverses the error chain and returns the first non-unknown fault found.
-// Outer layers override inner layers when explicitly set. Descends into
-// multi-unwrap values (e.g. errors.Join), checking each child in order.
-func GetFault(err error) Fault {
-	v, ok := walkProperty(err, func(wm *withMetadata) (Fault, bool) {
-		if wm.fault != FaultUnknown {
-			return wm.fault, true
-		}
-		return FaultUnknown, false
-	})
-	if !ok {
-		return FaultUnknown
-	}
-	return v
-}
-
-// GetFields extracts all fields from an error chain, outermost layer first.
-// At a multi-unwrap node (e.g. errors.Join), it collects from each child in
-// order (each child walked outer to inner) and concatenates the results;
-// fields are never deduplicated, since Fields.Lookup already returns the
-// first (outermost/earliest) match for a given key.
+// GetFields returns every field in err's chain, outermost layer first: an
+// *Error's own fields, then those of its wrapped error's chain, then those
+// of its cause's chain; at a join, each child's fields in order. Fields are
+// never deduplicated, since Fields.Lookup returns the first (outermost)
+// match for a given key.
 func GetFields(err error) Fields {
 	var fields Fields
-	for !isNilError(err) {
-		if wm, ok := err.(*withMetadata); ok {
-			if len(wm.fields) > 0 {
-				fields = append(fields, wm.fields...)
-			}
-			err = normalizeError(wm.parent)
-		} else if multi, ok := err.(multiUnwrapper); ok {
-			for _, child := range multi.Unwrap() {
-				fields = append(fields, GetFields(child)...)
-			}
-			return fields
-		} else if u, ok := err.(unwrapper); ok {
-			err = normalizeError(u.Unwrap())
-		} else {
-			break
-		}
-	}
+	collectFields(err, &fields)
 	return fields
 }
 
-// ListFields is an alias for GetFields.
+func collectFields(err error, out *Fields) {
+	if isNilError(err) {
+		return
+	}
+	if e, ok := err.(*Error); ok {
+		*out = append(*out, e.fields...)
+	}
+	for _, child := range children(err) {
+		collectFields(child, out)
+	}
+}
+
+// ListFields returns GetFields(err) as a flat slice of alternating keys and
+// values.
 func ListFields(err error) []any {
 	return GetFields(err)
 }
@@ -358,17 +414,14 @@ func formatLogfmtFields(w io.Writer, fields []any) {
 			io.WriteString(w, " ")
 		}
 
-		// Write key
 		key := fmt.Sprint(fields[i])
 		io.WriteString(w, key)
 		io.WriteString(w, "=")
 
-		// Write value
 		if i+1 < len(fields) {
 			value := fields[i+1]
 			switch v := value.(type) {
 			case string:
-				// Quote strings that contain spaces or special characters
 				if needsQuoting(v) {
 					fmt.Fprintf(w, "%q", v)
 				} else {

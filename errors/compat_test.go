@@ -39,7 +39,9 @@ type layer struct {
 	fault errors.Fault
 	// field is true when this layer sets the field fieldKey(i).
 	field bool
-	// nilSafe is true when wrapping a nil error returns an untyped nil.
+	// nilSafe is true when wrapping a nil or typed-nil error must return an
+	// untyped nil. github.com/pkg/errors does not detect typed-nil errors, so
+	// its layers are not nilSafe.
 	nilSafe bool
 }
 
@@ -78,6 +80,14 @@ func layers() []layer {
 			}},
 		{name: "With.Stack", ours: true, causer: true,
 			wrap: func(err error, _ int) error { return errors.With(err).Stack() }},
+		{name: "Wrap+items", ours: true, causer: true, field: true, nilSafe: true,
+			wrap: func(err error, i int) error {
+				return errors.Wrap(err, "items", errors.ErrNotFound, faultFor(i), fieldKey(i), i)
+			}},
+		{name: "Errorf(%w)", ours: true,
+			wrap: func(err error, _ int) error { return errors.Errorf("errorf: %w", err) }},
+		{name: "With.CausedBy(err)", ours: true, causer: true,
+			wrap: func(err error, _ int) error { return errors.With(other, "with").CausedBy(err) }},
 		{name: "WithCause(err,other)", ours: true, nilSafe: false,
 			wrap: func(err error, _ int) error { return errors.WithCause(err, other) }},
 		{name: "WithCause(other,err)", ours: true, causer: true,
@@ -88,9 +98,9 @@ func layers() []layer {
 			wrap: func(err error, _ int) error { errors.AddStack(&err); return err }},
 		{name: "fmt.Errorf", nilSafe: false,
 			wrap: func(err error, _ int) error { return fmt.Errorf("fmt: %w", err) }},
-		{name: "pkg.Wrap", causer: true, nilSafe: true,
+		{name: "pkg.Wrap", causer: true,
 			wrap: func(err error, _ int) error { return pkgerrors.Wrap(err, "pkg") }},
-		{name: "pkg.WithStack", causer: true, nilSafe: true,
+		{name: "pkg.WithStack", causer: true,
 			wrap: func(err error, _ int) error { return pkgerrors.WithStack(err) }},
 		{name: "Join(err,other)",
 			wrap: func(err error, _ int) error { return errors.Join(err, other) }},
@@ -189,6 +199,26 @@ var invariants = []invariant{
 		}
 		return nil
 	}},
+	{"stack originates at a call site in this file", func(c chain, _ *rootError, err error) error {
+		st, ok := err.(interface{ StackTrace() pkgerrors.StackTrace })
+		if !ok || len(st.StackTrace()) == 0 {
+			return nil
+		}
+		if top := fmt.Sprintf("%+v", st.StackTrace()[0]); !strings.Contains(top, "compat_test.go") {
+			return fmt.Errorf("top frame is %s", top)
+		}
+		return nil
+	}},
+	{"Kind is found", func(c chain, _ *rootError, err error) error {
+		for _, l := range c {
+			if l.name == "Wrap+items" {
+				if !errors.Is(err, errors.ErrNotFound) || errors.GetKind(err) != errors.ErrNotFound {
+					return fmt.Errorf("Is = %v, GetKind = %v", errors.Is(err, errors.ErrNotFound), errors.GetKind(err))
+				}
+			}
+		}
+		return nil
+	}},
 	{"StackTrace is exposed", func(c chain, _ *rootError, err error) error {
 		if !c[len(c)-1].ours {
 			return nil
@@ -245,29 +275,9 @@ var invariants = []invariant{
 }
 
 // knownViolations lists invariants the package does not yet satisfy, keyed by
-// invariant name. Failures of these invariants are logged, not failed.
-var knownViolations = map[string]string{
-	"Is reaches the root":              "WithCause(err, cause) unwraps only to err, so errors.Is never sees the cause branch",
-	"As reaches the root":              "WithCause(err, cause) unwraps only to err, so errors.As never sees the cause branch",
-	"OneOf matches the root":           "OneOf compares only the pkg/errors root cause, which stops at fmt.Errorf, Join, and WithCause(err, cause)",
-	"%+v prints exactly one stack":     "every pkg/errors Wrap and WithStack layer captures and prints its own stack",
-	"StackTrace is exposed":            "withMetadata, withCause, Builder, and pkg/errors withMessage do not implement StackTrace",
-	"%s, %v and %q agree with Error()": "withMetadata appends logfmt fields to %s and %v; pkg/errors withMessage ignores %q",
-	"Error() contains no fields":       "fmt.Errorf formats its operand with %v, which includes withMetadata fields, baking them into the message",
-	"every field is found":             "GetFields does not descend into the cause branch of WithCause",
-	"outermost fault wins":             "GetFault does not descend into the cause branch of WithCause",
-}
-
-// knownNilViolations lists layers, keyed by name, that do not yet return an
-// untyped nil for a nil or typed-nil input.
-var knownNilViolations = map[string]string{
-	"Wrap":          "pkg/errors.Wrap wraps a typed-nil error; printing the result panics",
-	"Wrapf":         "pkg/errors.Wrapf wraps a typed-nil error; printing the result panics",
-	"WithMessage":   "pkg/errors.WithMessage wraps a typed-nil error; printing the result panics",
-	"WithStack":     "pkg/errors.WithStack wraps a typed-nil error; printing the result panics",
-	"pkg.Wrap":      "github.com/pkg/errors does not detect typed-nil errors",
-	"pkg.WithStack": "github.com/pkg/errors does not detect typed-nil errors",
-}
+// invariant name, with the reason. Failures of these invariants are logged,
+// not failed.
+var knownViolations = map[string]string{}
 
 // compose returns a chain of the given layers, with each fault-setting layer's
 // expected fault resolved for its position.
@@ -354,10 +364,6 @@ func TestCompat_NilInputs(t *testing.T) {
 				failures = append(failures, fmt.Sprintf("typed-nil input returned %T", err))
 			}
 			if len(failures) == 0 {
-				return
-			}
-			if reason, known := knownNilViolations[l.name]; known {
-				t.Logf("known violation (%s): %s", reason, strings.Join(failures, "; "))
 				return
 			}
 			t.Error(strings.Join(failures, "; "))

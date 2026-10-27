@@ -107,9 +107,9 @@ func TestFaultUpstream(t *testing.T) {
 		require.Equal(t, errors.FaultUpstream, errors.GetFault(err))
 	})
 
-	t.Run("RoundTripsThroughBuilderSet", func(t *testing.T) {
-		builder := errors.With(baseErr, "rpc call failed").Set(errors.FaultUpstream)
-		err := builder.Err()
+	t.Run("RoundTripsThroughFluentSet", func(t *testing.T) {
+		fluent := errors.With(baseErr, "rpc call failed").Set(errors.FaultUpstream)
+		err := fluent.Err()
 		require.Equal(t, errors.FaultUpstream, errors.GetFault(err))
 	})
 
@@ -244,12 +244,26 @@ func TestGetRetryability_JoinedErrors(t *testing.T) {
 		require.False(t, errors.IsRetryable(joined))
 	})
 
-	t.Run("FoundInSecondChild", func(t *testing.T) {
+	t.Run("UnclassifiedChildMakesJoinUnknown", func(t *testing.T) {
 		unclassified := pkgerrors.New("plain error")
 		classified := errors.WithMetadata(baseErr, errors.Retryable)
 		joined := errors.Join(unclassified, classified)
+		require.Equal(t, errors.UnknownRetryability, errors.GetRetryability(joined))
+		require.False(t, errors.IsRetryable(joined))
+	})
+
+	t.Run("EveryChildRetryable", func(t *testing.T) {
+		a := errors.WithMetadata(baseErr, errors.Retryable)
+		b := errors.Wrap(errors.ErrServiceUnavailable, "upstream")
+		joined := errors.Join(a, b)
 		require.Equal(t, errors.Retryable, errors.GetRetryability(joined))
-		require.True(t, errors.IsRetryable(joined))
+	})
+
+	t.Run("AnyNonRetryableChildWins", func(t *testing.T) {
+		a := errors.WithMetadata(baseErr, errors.Retryable)
+		b := errors.WithMetadata(baseErr, errors.NonRetryable)
+		joined := errors.Join(a, b)
+		require.Equal(t, errors.NonRetryable, errors.GetRetryability(joined))
 	})
 
 	t.Run("OuterMetadataOverridesJoinedChild", func(t *testing.T) {

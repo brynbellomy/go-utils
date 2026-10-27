@@ -3,46 +3,25 @@ package errors
 import (
 	stderrors "errors"
 	"fmt"
-	"io"
-	"slices"
 
-	"github.com/pkg/errors"
+	pkgerrors "github.com/pkg/errors"
 )
 
 // Common sentinel errors for various failure scenarios.
 var (
 	// ErrConnection indicates that a network or service connection failed.
-	ErrConnection = errors.New("connection failed")
+	ErrConnection = Sentinel("connection failed")
 	// ErrClosed indicates that an operation was attempted on a closed resource.
-	ErrClosed = errors.New("closed")
+	ErrClosed = Sentinel("closed")
 	// ErrUnsupported indicates that a requested feature or operation is not supported.
-	ErrUnsupported = errors.New("unsupported")
+	ErrUnsupported = Sentinel("unsupported")
 )
 
-// Re-exported functions from github.com/pkg/errors and standard library for convenience.
+// Re-exported functions from github.com/pkg/errors and the standard library.
 var (
-	// New returns an error that formats as the given text. Each call to New returns
-	// a distinct error value even if the text is identical.
-	New = errors.New
-	// Errorf formats according to a format specifier and returns the string as a
-	// value that satisfies error.
-	Errorf = errors.Errorf
-	// Wrap returns an error annotating err with a stack trace at the point Wrap is called,
-	// and the supplied message. If err is nil, Wrap returns nil.
-	Wrap = errors.Wrap
-	// Wrapf returns an error annotating err with a stack trace at the point Wrapf is called,
-	// and the format specifier. If err is nil, Wrapf returns nil.
-	Wrapf = errors.Wrapf
-	// WithStack annotates err with a stack trace at the point WithStack was called.
-	// If err is nil, WithStack returns nil.
-	WithStack = errors.WithStack
-	// WithMessage annotates err with a new message. If err is nil, WithMessage returns nil.
-	WithMessage = errors.WithMessage
-	// WithMessagef annotates err with the format specifier. If err is nil, WithMessagef returns nil.
-	WithMessagef = errors.WithMessagef
 	// Cause returns the underlying cause of the error, if possible. An error value has a cause
-	// if it implements the causer interface.
-	Cause = errors.Cause
+	// if it implements the causer interface; every *Error does.
+	Cause = pkgerrors.Cause
 	// Join returns an error that wraps the given errors. Any nil error values are discarded.
 	// Join returns nil if every value in errs is nil.
 	Join = stderrors.Join
@@ -56,10 +35,23 @@ var (
 	// second import to unwrap into a concrete error type alongside this
 	// package's helpers.
 	As = stderrors.As
+	// Unwrap returns the result of calling the Unwrap method on err, if err's
+	// type contains an Unwrap method returning error. Otherwise, Unwrap
+	// returns nil. It is the standard library's errors.Unwrap.
+	Unwrap = stderrors.Unwrap
 )
 
-// Annotate wraps the error pointed to by err with the formatted message if err is non-nil.
-// This is useful for defer statements where you want to add context to any error returned.
+// AsType finds the first error in err's chain that is of type E, as by As,
+// and returns it.
+func AsType[E error](err error) (E, bool) {
+	var target E
+	ok := stderrors.As(err, &target)
+	return target, ok
+}
+
+// Annotate wraps the error pointed to by err with the formatted message if err is non-nil,
+// as by Wrapf. This is useful for defer statements where you want to add context to any
+// error returned. A typed-nil *err is replaced with an untyped nil.
 //
 // Example usage:
 //
@@ -75,12 +67,12 @@ func Annotate(err *error, msg string, args ...any) {
 		*err = nil
 		return
 	}
-	*err = errors.Wrapf(*err, msg, args...)
+	*err = &Error{msg: fmt.Sprintf(msg, args...), parent: *err, stack: callersIfNone(*err)}
 }
 
-// AddStack adds a stack trace to the error pointed to by err if err is non-nil.
+// AddStack wraps the error pointed to by err as by WithStack if err is non-nil.
 // This is useful for defer statements where you want to capture the stack trace at the
-// point where the function returns.
+// point where the function returns. A typed-nil *err is replaced with an untyped nil.
 //
 // Example usage:
 //
@@ -96,11 +88,10 @@ func AddStack(err *error) {
 		*err = nil
 		return
 	}
-	*err = errors.WithStack(*err)
+	*err = &Error{parent: *err, stack: callersIfNone(*err)}
 }
 
-// OneOf returns true if the root cause of the received error matches any of the provided errors.
-// It uses Cause to unwrap the received error to its root cause before comparison.
+// OneOf reports whether any of errs matches received, as by errors.Is.
 //
 // Example usage:
 //
@@ -111,92 +102,10 @@ func OneOf(received error, errs ...error) bool {
 	if isNilError(received) {
 		return false
 	}
-	return slices.Contains(errs, Cause(received))
-}
-
-// WithCause wraps an error with an explicit root cause. This is useful when you want to
-// create a new error message but preserve the original error as the cause.
-// The returned error implements the Cause() interface for accessing the root cause,
-// and Unwrap() for Go 1.13+ error chain compatibility.
-// If either side is nil or typed-nil, WithCause returns the non-nil side directly.
-// If both sides are nil or typed-nil, WithCause returns nil.
-//
-// Example usage:
-//
-//	if err := validate(input); err != nil {
-//	    return WithCause(errors.New("invalid request"), err)
-//	}
-func WithCause(err error, cause error) error {
-	err = normalizeError(err)
-	cause = normalizeError(cause)
-	if err == nil {
-		return cause
-	}
-	if cause == nil {
-		return err
-	}
-	return &withCause{err, cause}
-}
-
-type withCause struct {
-	error
-	cause error
-}
-
-func (w *withCause) Error() string {
-	if w == nil {
-		return nilErrorString
-	}
-
-	err := normalizeError(w.error)
-	cause := normalizeError(w.cause)
-	switch {
-	case err == nil && cause == nil:
-		return nilErrorString
-	case err == nil:
-		return cause.Error()
-	case cause == nil:
-		return err.Error()
-	default:
-		return err.Error() + ": " + cause.Error()
-	}
-}
-
-func (w *withCause) Cause() error {
-	if w == nil {
-		return nil
-	}
-	return normalizeError(w.cause)
-}
-
-// Unwrap provides compatibility for Go 1.13 error chains.
-// Returns the wrapper error to maintain proper chain traversal.
-// Use Cause() for direct access to the root cause.
-func (w *withCause) Unwrap() error {
-	if w == nil {
-		return nil
-	}
-	return normalizeError(w.error)
-}
-
-func (w *withCause) Format(s fmt.State, verb rune) {
-	switch verb {
-	case 'v':
-		if s.Flag('+') {
-			cause := w.Cause()
-			err := w.Unwrap()
-			if cause != nil {
-				fmt.Fprintf(s, "%+v\n", cause)
-			}
-			if err != nil {
-				io.WriteString(s, err.Error())
-			} else {
-				io.WriteString(s, nilErrorString)
-			}
-			return
+	for _, target := range errs {
+		if stderrors.Is(received, target) {
+			return true
 		}
-		fallthrough
-	case 's', 'q':
-		io.WriteString(s, w.Error())
 	}
+	return false
 }

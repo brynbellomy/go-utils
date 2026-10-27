@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 
 	pkgerrors "github.com/pkg/errors"
@@ -21,11 +22,11 @@ func (e *pointerError) Error() string {
 	return e.msg
 }
 
-func returnNilBuilderAsError() error {
+func returnNilErrorNodeAsError() error {
 	return errors.With(nil, "context")
 }
 
-func TestBuilderWithStatusCode(t *testing.T) {
+func TestFluentWithStatusCode(t *testing.T) {
 	var errfields errors.Fields
 	errfields.Add("foo", "bar")
 	cause := errors.New("blah")
@@ -71,7 +72,7 @@ func TestWithCause_Format(t *testing.T) {
 	}{
 		{"SimpleString", "%s", "original error: root cause"},
 		{"Verb_v", "%v", "original error: root cause"},
-		{"Quote", "%q", "original error: root cause"},
+		{"Quote", "%q", `"original error: root cause"`},
 	}
 
 	for _, tt := range tests {
@@ -186,32 +187,38 @@ func TestWithMetadata_Format(t *testing.T) {
 		{
 			name:     "SimpleFields",
 			err:      errors.WithMetadata(errors.New("operation failed"), "user_id", 123, "action", "login"),
-			format:   "%s",
+			format:   "%+v",
 			expected: "operation failed user_id=123 action=login",
 		},
 		{
 			name:     "StringWithSpaces",
 			err:      errors.WithMetadata(errors.New("request failed"), "method", "GET", "path", "/api/v1/users"),
-			format:   "%s",
+			format:   "%+v",
 			expected: "request failed method=GET path=/api/v1/users",
 		},
 		{
 			name:     "StringRequiringQuotes",
 			err:      errors.WithMetadata(errors.New("error occurred"), "message", "connection timed out", "code", 500),
-			format:   "%s",
+			format:   "%+v",
 			expected: `error occurred message="connection timed out" code=500`,
 		},
 		{
 			name:     "MixedTypes",
 			err:      errors.WithMetadata(errors.New("validation error"), "field", "email", "value", "test@example.com", "required", true, "max_length", 255),
-			format:   "%s",
+			format:   "%+v",
 			expected: "validation error field=email value=test@example.com required=true max_length=255",
 		},
 		{
 			name:     "VerboseFormat",
 			err:      errors.WithMetadata(errors.New("base error"), "key", "value"),
-			format:   "%v",
+			format:   "%+v",
 			expected: "base error key=value",
+		},
+		{
+			name:     "PlainFormatOmitsFields",
+			err:      errors.WithMetadata(errors.New("base error"), "key", "value"),
+			format:   "%v",
+			expected: "base error",
 		},
 		{
 			name:     "QuotedFormat",
@@ -224,6 +231,10 @@ func TestWithMetadata_Format(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := fmt.Sprintf(tt.format, tt.err)
+			if tt.format == "%+v" {
+				// %+v prints the message and fields, then the stack trace.
+				result, _, _ = strings.Cut(result, "\n")
+			}
 			require.Equal(t, tt.expected, result)
 		})
 	}
@@ -234,7 +245,7 @@ func TestWithMetadata_FormatNested(t *testing.T) {
 	err1 := errors.WithMetadata(baseErr, "table", "users", "operation", "insert")
 	err2 := errors.WithMetadata(err1, "user_id", 123, "retry", 3)
 
-	result := fmt.Sprintf("%s", err2)
+	result := fmt.Sprintf("%+v", err2)
 	// Fields should be collected from all levels
 	require.Contains(t, result, "user_id=123")
 	require.Contains(t, result, "retry=3")
@@ -464,13 +475,13 @@ func TestPointerErrorHelpersNormalizeTypedNil(t *testing.T) {
 	require.Nil(t, err)
 }
 
-func TestTypedNilBuilderAsErrorIsBenign(t *testing.T) {
-	var builder *errors.Builder
-	var err error = builder
+func TestTypedNilErrorNodeAsErrorIsBenign(t *testing.T) {
+	var fluent *errors.Error
+	var err error = fluent
 
 	// This comparison is controlled by Go's interface representation, not by the
 	// errors package. The package can make this value benign, but cannot make this
-	// comparison false while With still returns *Builder.
+	// comparison false while With returns *Error.
 	require.True(t, err != nil)
 	require.Equal(t, "<nil>", err.Error())
 	require.Nil(t, stderrors.Unwrap(err))
@@ -480,7 +491,7 @@ func TestTypedNilBuilderAsErrorIsBenign(t *testing.T) {
 	require.Nil(t, errors.GetFields(err).List())
 	require.Nil(t, errors.WithMetadata(err, "key", "value"))
 
-	err = returnNilBuilderAsError()
+	err = returnNilErrorNodeAsError()
 	require.True(t, err != nil)
 	require.Equal(t, "<nil>", err.Error())
 	require.Nil(t, stderrors.Unwrap(err))
@@ -711,15 +722,15 @@ func TestWithMetadata_PropertyOverrides(t *testing.T) {
 	})
 }
 
-func TestWithMetadata_IntegrationWithBuilder(t *testing.T) {
+func TestWithMetadata_IntegrationWithFluentAPI(t *testing.T) {
 	baseErr := pkgerrors.New("base error")
 
-	t.Run("BuilderSetMethod", func(t *testing.T) {
-		builder := errors.With(baseErr, "wrapped").
+	t.Run("FluentSetMethod", func(t *testing.T) {
+		fluent := errors.With(baseErr, "wrapped").
 			Set(errors.FaultInternal, errors.StatusCode(500), "key", "value")
 
-		// Extract the actual error from the builder
-		err := builder.Err()
+		// Convert the chain to error
+		err := fluent.Err()
 
 		// With the unified design, ALL properties and fields are accessible!
 		require.Equal(t, errors.FaultInternal, errors.GetFault(err))
@@ -734,13 +745,13 @@ func TestWithMetadata_IntegrationWithBuilder(t *testing.T) {
 		require.Contains(t, err.Error(), "base error")
 	})
 
-	t.Run("BuilderSetWithFields", func(t *testing.T) {
+	t.Run("FluentSetWithFields", func(t *testing.T) {
 		errfs := errors.Fields{"user", "alice", "action", "login"}
-		builder := errors.WithNew("auth failed").
+		fluent := errors.WithNew("auth failed").
 			Set(errors.FaultCaller, errors.StatusCode(403), errfs)
 
-		// Extract the actual error from the builder
-		err := builder.Err()
+		// Convert the chain to error
+		err := fluent.Err()
 
 		// Everything is accessible in a single layer!
 		require.Equal(t, errors.FaultCaller, errors.GetFault(err))
@@ -751,13 +762,13 @@ func TestWithMetadata_IntegrationWithBuilder(t *testing.T) {
 		require.Equal(t, []any{"user", "alice", "action", "login"}, fields)
 	})
 
-	t.Run("BuilderMultipleSets", func(t *testing.T) {
+	t.Run("FluentMultipleSets", func(t *testing.T) {
 		// Multiple Set() calls create layers, but getters traverse all layers
-		builder := errors.WithNew("auth failed").
+		fluent := errors.WithNew("auth failed").
 			Set(errors.FaultCaller, "user", "alice").
 			Set(errors.StatusCode(403), "action", "login")
 
-		err := builder.Err()
+		err := fluent.Err()
 
 		// Getters now traverse the entire chain to find properties
 		require.Equal(t, errors.FaultCaller, errors.GetFault(err)) // Found in inner layer
@@ -768,18 +779,18 @@ func TestWithMetadata_IntegrationWithBuilder(t *testing.T) {
 		require.Equal(t, []any{"action", "login", "user", "alice"}, fields)
 	})
 
-	t.Run("BuilderAsError", func(t *testing.T) {
-		// Test that Builder can be used directly as an error
-		builder := errors.WithNew("test error").
+	t.Run("FluentAsError", func(t *testing.T) {
+		// A fluent chain can be used directly as an error
+		fluent := errors.WithNew("test error").
 			Set(errors.FaultInternal, errors.StatusCode(500))
 
-		// Builder can be assigned to error interface
-		var err error = builder
+		// An *Error can be assigned to the error interface
+		var err error = fluent
 		require.NotNil(t, err)
 		require.Contains(t, err.Error(), "test error")
 
 		// Extract the actual error for property inspection
-		innerErr := builder.Err()
+		innerErr := fluent.Err()
 		require.Equal(t, errors.FaultInternal, errors.GetFault(innerErr))
 		require.Equal(t, 500, errors.GetStatusCode(innerErr))
 	})
@@ -872,7 +883,7 @@ func TestStdlibErrorsIs_WithCustomTypes(t *testing.T) {
 		{"CauseWrappedMatch", causeErr, statusErr, true}, // withCause now properly maintains chain
 		{"StdWrappedMatch", wrappedErr, statusErr, true},
 		{"NoMatch", statusErr, stdErr, false},
-		{"CauseToStdErr", causeErr, stdErr, false}, // stdErr not in Unwrap chain (only accessible via Cause())
+		{"CauseToStdErr", causeErr, stdErr, true}, // (*Error).Is searches the cause branch
 	}
 
 	for _, tt := range tests {

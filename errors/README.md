@@ -1,92 +1,115 @@
-# Strucured Error Handling Library
+# Structured Error Handling Library
 
 ## Overview
 
-This library provides a builder pattern for creating richly annotated errors with three orthogonal dimensions of metadata:
+This library annotates errors with three orthogonal dimensions of metadata:
 
 1. **Fields**: Key-value pairs for structured logging (compatible with zerolog, zap, log/slog)
-2. **Properties**: Machine-readable attributes for control flow (Fault, Retryability, StatusCode)
+2. **Properties**: Machine-readable attributes for control flow (Kind, Fault, Retryability, StatusCode, and custom properties)
 3. **Messages**: Human-readable context via standard error wrapping
 
-The library extends `github.com/pkg/errors` with these capabilities while maintaining compatibility with Go's standard error interfaces.
+It is a drop-in replacement for `github.com/pkg/errors` (`New`, `Errorf`, `Wrap`, `Wrapf`, `WithStack`, `WithMessage`, `WithMessagef`, `Cause`) and re-exports the standard library's `Is`, `As`, `Unwrap`, and `Join`.
 
-## Core Components
+## One Error Type
 
-### Builder Pattern
+Every constructor returns an `*Error`, either as `error` or as `*Error` for fluent construction. `*Error` implements every interface that the standard library, `github.com/pkg/errors`, `fmt`, and `log/slog` look for (`Unwrap`, `Cause`, `Is`, `As`, `Format`, `StackTrace`, and `LogValue`), so wrapping never hides any of them, no matter how a chain is composed. `compat_test.go` checks this over hundreds of chains mixing this package's constructors with `fmt.Errorf`, `errors.Join`, and `github.com/pkg/errors`.
+
+An `*Error` is immutable. Its methods that return `*Error` return a new node wrapping the receiver, so a stored or shared error is never altered.
+
+## Constructing Errors
+
+`New` and `Wrap` take a constant message followed by items, in the style of `log/slog`:
 
 ```go
-// Wrap an existing error with a message and optional format arguments, then add properties and fields
-errfs := errors.Fields{
-    "method", "GET",
-    "duration", time.Now().Sub(startTime),
-}
-
-// ... 
-
-return errors.With(err, "failed to call legacy auth service (time: %v)", time.Now()).Set(
-    errors.FaultInternal,
-    errfs,
-    "url", url,
-    "username", username,
+return errors.Wrap(err, "failed to call legacy auth service",
+    errors.ErrServiceUnavailable, // a Kind
+    errors.FaultUpstream,         // overrides the Kind's default Fault
+    errfs,                        // errors.Fields
+    "url", url,                   // a field
+    slog.Int("attempt", n),       // a field
 )
 
-// Create a new error with optional format arguments, then add properties and fields
-return errors.WithNew("invalid API key (time: %v)", time.Now()).Set(
-    errors.FaultCaller,
-    errors.StatusCode(resp.StatusCode),
-    errfs,
-    "url", url,
-    "username", username,
-)
+return errors.New("invalid API key", errors.ErrUnauthorized, "key_len", len(key))
 ```
 
-### Nil Handling
+Each item is one of:
+- an `Option`: `Kind`, `Fault`, `Retryability`, `StatusCode`, `Fields`, or a value returned by `Prop`;
+- a `slog.Attr`, appended as a field;
+- any other value, appended to the fields as-is, so consecutive `"key", value` items form a field.
 
-`With`, `WithNew`, `WithMetadata`, `WithCause`, `Annotate`, `AddStack`, and metadata traversal helpers treat typed-nil error interfaces as nil. This guards the common Go footgun where an `error` interface can hold a nil concrete pointer while the interface itself is non-nil:
+Keep messages constant and put variable data in fields: constant messages group cleanly in error trackers and dashboards. `Wrapf`, `Errorf` (with `%w` support), and `WithMessagef` format messages for `github.com/pkg/errors` compatibility.
+
+`Wrap`, `Wrapf`, `WithMessage`, `WithMessagef`, `WithStack`, `WithMetadata`, `Annotate`, and `AddStack` return an untyped nil for a nil or typed-nil input, so their results can always be returned directly as `error`.
+
+### Fluent Construction
+
+`With` and `WithNew` return an `*Error` whose methods chain:
 
 ```go
-var typedNil *MyError
-var err error = typedNil
+return errors.With(err, "failed to call legacy auth service (attempt %d)", n).
+    Set(errors.FaultInternal, errfs, "url", url).
+    CausedBy(ctxErr)
 
-errors.With(err, "context")              // nil *Builder
-errors.WithMetadata(err, "key", "value") // nil error
+return errors.WithNew("invalid API key").Set(errors.ErrUnauthorized)
 ```
 
-The fluent builder methods also remain nil-safe:
+`With` formats its message with `fmt.Sprintf` when given arguments. `Set` accepts the same items as `New` and `Wrap`.
 
-```go
-return errors.With(err, "context").Set(errors.FaultInternal)
-```
-
-If `err` is nil or typed-nil, the chain returns a nil `*Builder`. Go will still box that nil pointer as a non-nil `error` if it is returned directly from a function with return type `error`; no package implementation can change that while `With` continues to return `*Builder`. Use `.Err()` when the parent error may be nil and the value is being converted directly to `error`:
+The chain is nil-safe: `With(nil, ...)` returns a nil `*Error`, and every method on a nil `*Error` returns nil. Go boxes a nil `*Error` returned from a function with return type `error` as a non-nil `error`, so end a chain with `.Err()` when the parent error may be nil:
 
 ```go
 // err may be nil here: .Err() is required
 return errors.With(err, "context").Set(errors.FaultInternal).Err()
 
-// err is known non-nil: the Builder can be returned directly
+// err is known non-nil: the *Error can be returned directly
 if err != nil {
     return errors.With(err, "context").Set(errors.FaultInternal)
 }
 ```
 
-### Builder Semantics
+`Wrap` has no such caveat, since it returns `error`.
 
-A non-nil `*Builder` is transparent: it formats (including `%+v` stack traces), unwraps, and reports its `Cause()` exactly as the error it holds does, so `errors.Is`, `errors.As`, `errors.Cause`, `OneOf`, and the property getters behave identically whether or not `.Err()` is called.
+## Kinds
 
-Builder methods never modify their receiver. Each call returns a new `*Builder`, so a stored or shared Builder is never altered by later chains.
+A `Kind` classifies an error. Each Kind is a sentinel error, an `Option`, and a set of defaults:
 
-The HTTP sentinels (`ErrNotFound`, `ErrBadRequest`, etc.) are plain `error` values. Wrap them with `With` to add context while preserving identity:
+| Kind | `Error()` | Status | Fault | Retryability |
+|---|---|---|---|---|
+| `ErrBadRequest` | bad request | 400 | caller | unknown |
+| `ErrUnauthorized` | unauthorized | 401 | caller | unknown |
+| `ErrForbidden` | forbidden | 403 | caller | unknown |
+| `ErrNotFound` | not found | 404 | caller | unknown |
+| `ErrConflict` | conflict | 409 | caller | unknown |
+| `ErrTooManyRequests` | too many requests | 429 | caller | retryable |
+| `ErrUnimplemented` | not implemented | 501 | caller | unknown |
+| `ErrInternalServerError` | internal server error | 500 | internal | unknown |
+| `ErrServiceUnavailable` | service unavailable | 503 | internal | retryable |
+| `ErrTimeout` | timeout | 504 | internal | retryable |
 
 ```go
-err := errors.With(errors.ErrNotFound, "user %d", id).Set("id", id)
+// As a sentinel:
+return errors.ErrNotFound
+return errors.Wrap(errors.ErrNotFound, "load user", "id", id)
+
+// As an option, classifying an existing error:
+return errors.Wrap(err, "load user", errors.ErrNotFound, "id", id)
+
+// Either way:
 errors.Is(err, errors.ErrNotFound) // true
+errors.GetKind(err)                // errors.ErrNotFound
 errors.GetStatusCode(err)          // 404
+errors.GetFault(err)               // errors.FaultCaller
 ```
 
-`ErrTooManyRequests` and `ErrServiceUnavailable` are marked `Retryable`.
+`Kind.String()` returns a stable, space-free name (`"not_found"`) for log fields and metrics labels.
 
-### Properties
+Declare domain sentinels with `Sentinel`, which captures no stack (wrapping a sentinel captures one at the wrap site):
+
+```go
+var ErrUserMissing = errors.Sentinel("user missing", errors.ErrNotFound)
+```
+
+## Properties
 
 ```go
 type Fault uint8
@@ -104,7 +127,7 @@ const (
     NonRetryable
 )
 
-type StatusCode int  // HTTP status codes for API responses
+type StatusCode int  // An explicit HTTP status code, overriding the Kind's default
 ```
 
 `Fault` and `Retryability` both have a `String()` method returning a lowercase,
@@ -113,7 +136,43 @@ Fault; `"unknown"`, `"retryable"`, `"non_retryable"` for Retryability). These ar
 intended to be used verbatim as structured log field values or Prometheus label
 values.
 
-### Fields
+### Custom Properties
+
+`Prop` attaches a value of any type; `Lookup` retrieves the outermost one of a given type. Define a named type per property:
+
+```go
+type TenantID string
+
+err := errors.Wrap(err, "load tenant", errors.Prop(TenantID("acme")))
+id, ok := errors.Lookup[TenantID](err)
+```
+
+`Lookup` matches by assignability, so `T` may be an interface type.
+
+### Property Traversal
+
+`GetKind`, `GetFault`, `GetRetryability`, `IsRetryable`, `GetStatusCode`, and `Lookup` traverse the whole chain, so layers can contribute metadata independently:
+
+```go
+err1 := errors.WithMetadata(baseErr, errors.FaultInternal, errors.StatusCode(500))
+err2 := errors.WithMetadata(err1, errors.FaultCaller)
+
+errors.GetFault(err2)       // FaultCaller (outer layer wins)
+errors.GetStatusCode(err2)  // 500 (from inner layer)
+```
+
+**Traversal rules**:
+- Getters search outer → inner and return the first layer that sets the property.
+- On a single layer, an explicit `Fault`, `Retryability`, or `StatusCode` overrides that layer's `Kind` default; across layers, the outer layer wins, whether its value is explicit or a Kind default.
+- An error built with `WithCause` or `CausedBy` is searched through its wrapped error first and its cause second. `errors.Is`, `errors.As`, and `GetFields` reach the cause branch too.
+- At a join (`Join`, or anything implementing `Unwrap() []error`):
+  - `GetFault` returns the most severe Fault among the children: `FaultInternal`, then `FaultUpstream`, then `FaultCaller`.
+  - `GetRetryability` returns `NonRetryable` if any child is NonRetryable, `Retryable` if every child is Retryable, and `UnknownRetryability` otherwise.
+  - `GetKind`, `GetStatusCode`, and `Lookup` return the first child's value that is set.
+  - `GetFields` concatenates every child's fields.
+- An outer layer wrapping a join overrides whatever the join's children carry.
+
+## Fields
 
 ```go
 type Fields []any  // Key-value pairs: "key1", value1, "key2", value2, ...
@@ -121,14 +180,11 @@ type Fields []any  // Key-value pairs: "key1", value1, "key2", value2, ...
 errfs := errors.Fields{
     "url", url,
     "api_key", maskedKey,
-    "resp_code", resp.StatusCode,
 }
+errfs.Add("resp_code", resp.StatusCode)
 ```
 
-Use `errors.LookupField(err, key)` (or `Fields.Lookup(key)` on an already-extracted
-`Fields` value) to look up a single field by key instead of scanning `GetFields()`
-by hand. Like `GetFields`, it favors the outermost layer's value when the same key
-appears at multiple layers, and only string keys are considered:
+`GetFields(err)` (or `ListFields`) collects every field in the chain, outermost layer first. `LookupField(err, key)` returns the outermost value for a key; only string keys are considered:
 
 ```go
 if val, ok := errors.LookupField(err, "url"); ok {
@@ -136,38 +192,33 @@ if val, ok := errors.LookupField(err, "url"); ok {
 }
 ```
 
-### Property Traversal
+## Formatting and Logging
 
-Property getter functions (`GetFault()`, `GetStatusCode()`, `IsRetryable()`,
-`GetRetryability()`) traverse the entire error chain to find values, enabling flexible incremental enrichment. `GetRetryability()` returns the `Retryability` value itself (`UnknownRetryability`, `Retryable`, or `NonRetryable`) using the same outermost-first, first-explicit-value-wins traversal as `IsRetryable()`, which is defined in terms of it (`IsRetryable(err) == (GetRetryability(err) == Retryable)`):
+- `Error()`, `%s`, and `%v` print the message chain only: `"load user: no rows"`. Fields never appear in them, so wrapping with `fmt.Errorf("...: %w", err)` never bakes fields into a message.
+- `%q` prints `Error()` quoted.
+- `%+v` prints the message, then every field in logfmt form, then one stack trace:
 
-```go
-// Set fault at inner layer
-err1 := errors.WithMetadata(baseErr, errors.FaultInternal)
-// Add fields at outer layer
-err2 := errors.WithMetadata(err1, "user_id", "123")
-
-// Property remains accessible - getters traverse the chain
-errors.GetFault(err2)  // Returns FaultInternal (found in err1)
+```
+load user: no rows id=7 table=users
+main.loadUser
+	/app/user.go:42
+...
 ```
 
-**Traversal Rules**:
-- Getters search outer → inner, returning the first non-zero value
-- Outer layers can override inner values when explicitly set
-- All fields are collected from all layers via `GetFields()`
-- Properties set at any layer remain accessible
-- `GetFault()`, `GetRetryability()`, `GetStatusCode()`, and `GetFields()` all descend into multi-error values (anything implementing `Unwrap() []error`, such as the re-exported `Join`): at a join, the property getters check each child in order and return the first explicit value found, so an outer wrapper around a join still overrides whatever the join's children carry, while `GetFields()` instead concatenates every child's fields (each child walked outer → inner) rather than stopping at the first match.
+A stack is captured once, by the first constructor in a chain that finds no stack below it, so `%+v` prints exactly one trace: the one closest to where the error originated. `StackTrace()` returns that trace in `github.com/pkg/errors` form for error trackers and loggers that look for it.
 
-**Override Example**:
+`*Error` implements `slog.LogValuer`, so `slog.Any("err", err)` logs a structured group:
+
 ```go
-err1 := errors.WithMetadata(baseErr, errors.FaultInternal, errors.StatusCode(500))
-err2 := errors.WithMetadata(err1, errors.FaultCaller)  // Override fault
-
-errors.GetFault(err2)       // Returns FaultCaller (outer layer wins)
-errors.GetStatusCode(err2)  // Returns 500 (from inner layer)
+logger.Error("request failed", "err", err)
+// {"msg":"request failed","err":{"msg":"load user: no rows","kind":"not_found","fault":"caller","id":7,"table":"users"}}
 ```
 
-This allows different layers to independently contribute metadata without clobbering each other.
+## Helpers
+
+- `Annotate(&err, msg, args...)` and `AddStack(&err)` wrap a named return value from a `defer`.
+- `OneOf(err, targets...)` reports whether `errors.Is(err, target)` holds for any target.
+- `AsType[E](err)` is the generic form of `errors.As`.
 
 ## Example Usage
 
@@ -227,7 +278,7 @@ func (c *ProxyAuthClient) ValidateAPIKey(apiKey string) (*ProxyAuthResponse, err
         // Internal fault: unexpected response from upstream service
         return nil, errors.WithNew("unexpected status code from legacy service").Set(
             errors.FaultInternal,
-            errfs
+            errfs,
             errors.StatusCode(resp.StatusCode),
             "username", username,
         )
@@ -501,4 +552,4 @@ This errors library solves the fundamental problem of error handling in producti
 - Type-safe error handling
 - Framework-agnostic integration
 
-The builder pattern makes this ergonomic while maintaining full compatibility with Go's error interfaces.
+A single error type keeps this ergonomic while staying fully compatible with Go's error interfaces and `github.com/pkg/errors`.
